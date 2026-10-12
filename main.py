@@ -1,6 +1,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # MetaInsight v9 — Plateforme intégrative multi-omique, PGM, Épitranscriptomique
 # + Module CRISPR Design & Delivery (données réelles)
+# + Module Plant & Agronomie (compatible SIVB/CAST 2026)
 # ══════════════════════════════════════════════════════════════════════════════
 
 import streamlit as st
@@ -48,10 +49,8 @@ from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 import networkx as nx
 import joblib
 
-# ── Big Data
 try:
-    import duckdb
-    DUCKDB_AVAILABLE = True
+    import duckdb; DUCKDB_AVAILABLE = True
 except ImportError:
     DUCKDB_AVAILABLE = False
 
@@ -62,46 +61,18 @@ try:
 except ImportError:
     PYARROW_AVAILABLE = False
 
-# ── Optionnels
 try:
-    import biom
-    BIOM_AVAILABLE = True
-except ImportError:
-    BIOM_AVAILABLE = False
-
-try:
-    import anndata as ad
-    ANNDATA_AVAILABLE = True
-except ImportError:
-    ANNDATA_AVAILABLE = False
-
-try:
-    import h5py
-    H5PY_AVAILABLE = True
-except ImportError:
-    H5PY_AVAILABLE = False
-
-try:
-    import pysam
-    PYSAM_AVAILABLE = True
+    import pysam; PYSAM_AVAILABLE = True
 except ImportError:
     PYSAM_AVAILABLE = False
 
 try:
-    from Bio import SeqIO
-    BIOPYTHON_AVAILABLE = True
+    from Bio import SeqIO; BIOPYTHON_AVAILABLE = True
 except ImportError:
     BIOPYTHON_AVAILABLE = False
 
 try:
-    import statsmodels.api as sm
-    STATSMODELS_AVAILABLE = True
-except ImportError:
-    STATSMODELS_AVAILABLE = False
-
-try:
-    import xgboost as xgb
-    XGBOOST_AVAILABLE = True
+    import xgboost as xgb; XGBOOST_AVAILABLE = True
 except ImportError:
     XGBOOST_AVAILABLE = False
 
@@ -109,14 +80,13 @@ except ImportError:
 _ENV_GEMINI_KEY     = os.environ.get('GEMINI_API_KEY', '')
 _ENV_GROQ_KEY       = os.environ.get('GROQ_API_KEY', '')
 _ENV_OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '')
-_ENV_CLAUDE_KEY     = os.environ.get('ANTHROPIC_API_KEY', '')
 _ENV_DEEPSEEK_KEY   = os.environ.get('DEEPSEEK_API_KEY', '')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION STREAMLIT
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="MetaInsight v9 — Multi-omics + CRISPR",
+    page_title="MetaInsight v9 — Multi-omics + CRISPR + Plant",
     layout="wide",
     initial_sidebar_state="auto"
 )
@@ -141,10 +111,6 @@ st.markdown("""
     color: #E8EDF5; border-radius: 8px;
 }
 .stButton button:hover { background-color: #1F2940; border-color: #00D4AA; color: #00D4AA; }
-.kpi-card {
-    background-color: #0F1525; border: 1px solid #2A3550;
-    border-radius: 8px; padding: 1rem; text-align: center; margin-bottom: 1rem;
-}
 .badge-new {
     background: linear-gradient(90deg,#00D4AA,#4D9FFF);
     color:#000; font-size:0.65rem; padding:2px 7px; border-radius:10px;
@@ -162,14 +128,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CACHE DIRECTORY
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Cache
 CACHE_DIR = Path("./crispr_cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DONNÉES DE DÉMONSTRATION (fallback si pas de données réelles chargées)
+# DONNÉES DÉMO (fallback)
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_data
 def generate_demo_microbiome():
@@ -267,7 +231,6 @@ def generate_epi_annotation_db():
         'gene': ['BRCA1','BRCA1','TP53','MYC'],
         'motif': ['DRACH','UGU','CG','DRACH'],
         'confidence': ['High','Medium','High','High'],
-        'reference': ['PMID:34567890','PMID:34567891','PMID:34567892','PMID:34567893']
     })
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -342,8 +305,7 @@ def permanova_test(X, groups, n_permutations=999):
     f_obs = pseudo_f(dm, labels)
     f_perms = [pseudo_f(dm, np.random.RandomState(42).permutation(labels)) for _ in range(n_permutations)]
     p_val = (np.sum(np.array(f_perms) >= f_obs) + 1) / (n_permutations + 1)
-    r2 = f_obs / (f_obs + 1)
-    return {"F": round(f_obs, 4), "p-value": round(p_val, 4), "R²": round(r2, 3)}
+    return {"F": round(f_obs, 4), "p-value": round(p_val, 4), "R²": round(f_obs/(f_obs+1), 3)}
 
 def aldex2_like(df, taxa_cols, group_col, group1, group2):
     g1 = df[df[group_col] == group1][taxa_cols].values.astype(float)
@@ -455,7 +417,8 @@ def rarefaction_curve(df, taxa_cols, n_steps=20):
 
 def call_ai(prompt, provider, gemini_key=None, groq_key=None, openrouter_key=None,
             deepseek_key=None, gemini_model="gemini-1.5-flash",
-            groq_model="llama-3.3-70b-versatile", openrouter_model="meta-llama/llama-3.1-8b-instruct:free",
+            groq_model="llama-3.3-70b-versatile",
+            openrouter_model="meta-llama/llama-3.1-8b-instruct:free",
             ollama_model="llama3"):
     try:
         if provider == "Gemini Flash (Google — GRATUIT)":
@@ -524,8 +487,7 @@ def parse_epitranscriptomic_file(f):
         st.error(f"Erreur parsing : {e}"); return None
 
 def parse_fastq_metadata(f):
-    if not BIOPYTHON_AVAILABLE:
-        st.error("Biopython non installé"); return None
+    if not BIOPYTHON_AVAILABLE: return None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.fastq') as tmp:
             tmp.write(f.read()); tmp_path = tmp.name
@@ -533,12 +495,10 @@ def parse_fastq_metadata(f):
         avg_qual = np.mean([np.mean(r.letter_annotations["phred_quality"]) for r in records]) if records else 0
         os.unlink(tmp_path)
         return {"n_reads": len(records), "avg_quality": avg_qual}
-    except Exception as e:
-        st.error(f"Erreur FASTQ : {e}"); return None
+    except Exception: return None
 
 def parse_bam_advanced(f):
-    if not PYSAM_AVAILABLE:
-        st.error("pysam non installé"); return None
+    if not PYSAM_AVAILABLE: return None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.bam') as tmp:
             tmp.write(f.read()); tmp_path = tmp.name
@@ -554,8 +514,7 @@ def parse_bam_advanced(f):
         bam.close(); os.unlink(tmp_path)
         return {"n_reads": n_reads, "n_mapped": n_mapped, "n_reads_with_mods": n_with_mods,
                 "mod_rate": n_with_mods / max(n_reads, 1)}
-    except Exception as e:
-        st.error(f"Erreur BAM : {e}"); return None
+    except Exception: return None
 
 def plot_modification_profile_advanced(df, transcript_id=None, smooth=True):
     if transcript_id: df = df[df['transcript_id'] == transcript_id]
@@ -574,8 +533,7 @@ def plot_modification_heatmap(df):
     pivot = df.pivot_table(index='sample_id', columns='position',
                             values='modification_rate', aggfunc='mean')
     if pivot.empty: return None
-    return px.imshow(pivot, color_continuous_scale="RdBu_r", aspect="auto",
-                     title="Heatmap")
+    return px.imshow(pivot, color_continuous_scale="RdBu_r", aspect="auto", title="Heatmap")
 
 def get_default_model():
     return make_pipeline(StandardScaler(),
@@ -598,7 +556,7 @@ def load_model():
 def save_model(model): joblib.dump(model, MODEL_PATH)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — CONSTANTES ET DONNÉES RÉELLES
+# CRISPR — CONSTANTES
 # ══════════════════════════════════════════════════════════════════════════════
 PAM_PATTERNS = {
     "SpCas9 (NGG)":     {"pam": "NGG",    "guide_len": 20, "pam_side": "3'"},
@@ -651,46 +609,39 @@ CHROM_COLORS = {
     "chr21":"#C8C8C8","chr22":"#A8A8A8","chrX":"#FF8C8C","chrY":"#8C8CFF",
 }
 
-# ── CFD Matrix (Doench 2016, Table S19) ────────────────────────────────────
 CFD_MISMATCH_MATRIX = {
-    'A': {'A': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'C': [0,0,0.014,0,0,0.395,0.317,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'G': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'T': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0]},
-    'C': {'A': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'C': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'G': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'T': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0]},
-    'G': {'A': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'C': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'G': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'T': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0]},
-    'T': {'A': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'C': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'G': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
-          'T': [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0]},
+    'A': {'A':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'C':[0,0,0.014,0,0,0.395,0.317,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'G':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'T':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0]},
+    'C': {'A':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'C':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'G':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'T':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0]},
+    'G': {'A':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'C':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'G':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'T':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0]},
+    'T': {'A':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'C':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'G':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0],
+          'T':[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0]},
 }
 
-# ── MIT specificity weights (Hsu 2013) ─────────────────────────────────────
 MIT_WEIGHTS = [0.0,0.0,0.014,0.0,0.0,0.395,0.317,0.0,0.0,0.0,
                0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0]
 
-# ── UCSC genomes ───────────────────────────────────────────────────────────
 UCSC_GENOMES = {
     "hg38": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/",
     "hg19": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/",
     "mm10": "https://hgdownload.soe.ucsc.edu/goldenPath/mm10/chromosomes/",
-    "mm39": "https://hgdownload.soe.ucsc.edu/goldenPath/mm39/chromosomes/",
-    "rn6":  "https://hgdownload.soe.ucsc.edu/goldenPath/rn6/chromosomes/",
     "dm6":  "https://hgdownload.soe.ucsc.edu/goldenPath/dm6/chromosomes/",
     "ce11": "https://hgdownload.soe.ucsc.edu/goldenPath/ce11/chromosomes/",
 }
 
-# ── Doench 2016 URLs ───────────────────────────────────────────────────────
 DOENCH_2016_URLS = [
     "https://raw.githubusercontent.com/maximilianh/crisporWebsite/master/data/doench2016.tab",
     "https://raw.githubusercontent.com/maximilianh/crisporWebsite/master/data/doench2014.tab",
-    "https://raw.githubusercontent.com/microsoft/Azimuth/master/doench_2016.csv",
 ]
 
 DOENCH_2016_BUILTIN = [
@@ -707,15 +658,186 @@ DOENCH_2016_BUILTIN = [
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — TÉLÉCHARGEMENT DE DONNÉES RÉELLES
+# PLANT — CONSTANTES
+# ══════════════════════════════════════════════════════════════════════════════
+PLANT_GENOMES = {
+    "Arabidopsis (TAIR10)": {
+        "organism": "arabidopsis_thaliana", "assembly": "TAIR10",
+        "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/arabidopsis_thaliana/dna/",
+        "pattern": "Arabidopsis_thaliana.TAIR10.dna.chromosome.{chrom}.fa.gz",
+        "chroms": ["1","2","3","4","5"],
+        "size_mb": 120, "ploidy": "2n=10", "importance": "Modèle végétal",
+    },
+    "Maize (B73 v5)": {
+        "organism": "zea_mays", "assembly": "Zm-B73-REFERENCE-NAM-5.0",
+        "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/zea_mays/dna/",
+        "pattern": "Zea_mays.Zm-B73-REFERENCE-NAM-5.0.dna.chromosome.{chrom}.fa.gz",
+        "chroms": [str(i) for i in range(1, 11)],
+        "size_mb": 2200, "ploidy": "2n=20", "importance": "Culture majeure mondiale",
+    },
+    "Rice (IRGSP-1.0)": {
+        "organism": "oryza_sativa", "assembly": "IRGSP-1.0",
+        "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/oryza_sativa/dna/",
+        "pattern": "Oryza_sativa.IRGSP-1.0.dna.chromosome.{chrom}.fa.gz",
+        "chroms": [str(i) for i in range(1, 13)],
+        "size_mb": 400, "ploidy": "2n=24", "importance": "Modèle monocotylédone",
+    },
+    "Soybean (Wm82.a4)": {
+        "organism": "glycine_max", "assembly": "Wm82.a4.v1",
+        "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/glycine_max/dna/",
+        "pattern": "Glycine_max.V1.0.dna.chromosome.{chrom}.fa.gz",
+        "chroms": [str(i) for i in range(1, 21)],
+        "size_mb": 980, "ploidy": "2n=40", "importance": "Légumineuse majeure",
+    },
+    "Wheat (IWGSC)": {
+        "organism": "triticum_aestivum", "assembly": "IWGSC",
+        "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/triticum_aestivum/dna/",
+        "pattern": "Triticum_aestivum.IWGSC.dna.chromosome.{chrom}.fa.gz",
+        "chroms": [f"{g}{n}" for g in "ABD" for n in range(1, 8)][:21],
+        "size_mb": 14500, "ploidy": "2n=42 (hexaploïde)", "importance": "Céréale majeure",
+    },
+    "Tomato (SL3.0)": {
+        "organism": "solanum_lycopersicum", "assembly": "SL3.0",
+        "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/solanum_lycopersicum/dna/",
+        "pattern": "Solanum_lycopersicum.SL3.0.dna.chromosome.{chrom}.fa.gz",
+        "chroms": [str(i) for i in range(1, 13)],
+        "size_mb": 830, "ploidy": "2n=24", "importance": "Modèle Solanaceae",
+    },
+    "Barley (IBSC_v2)": {
+        "organism": "hordeum_vulgare", "assembly": "IBSC_v2",
+        "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/hordeum_vulgare/dna/",
+        "pattern": "Hordeum_vulgare.IBSC_v2.dna.chromosome.{chrom}.fa.gz",
+        "chroms": ["1H","2H","3H","4H","5H","6H","7H"],
+        "size_mb": 4900, "ploidy": "2n=14", "importance": "Céréale — tolérance stress",
+    },
+    "Grape (PN40024)": {
+        "organism": "vitis_vinifera", "assembly": "PN40024.v4",
+        "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/vitis_vinifera/dna/",
+        "pattern": "Vitis_vinifera.PN40024.v4.dna.chromosome.{chrom}.fa.gz",
+        "chroms": [str(i) for i in range(1, 20)],
+        "size_mb": 500, "ploidy": "2n=38", "importance": "Fruit / viticulture",
+    },
+}
+
+AGRONOMIC_TRAITS = {
+    "🌾 Rendement": {
+        "description": "Gènes contrôlant la productivité",
+        "genes": {
+            "Gn1a": {"species": "Riz", "function": "Nombre de grains par panicule", "ref": "Ashikari 2005 Science"},
+            "DEP1": {"species": "Riz", "function": "Densité panicule érigée", "ref": "Huang 2009 Nat Genet"},
+            "IPA1": {"species": "Riz", "function": "Architecture idéale plante", "ref": "Jiao 2010 Nat Genet"},
+            "WFP": {"species": "Riz", "function": "Nombre de grains", "ref": "Miura 2010 Plant Cell"},
+            "GS3": {"species": "Riz", "function": "Taille du grain", "ref": "Fan 2006 Theor Appl Genet"},
+            "TB1": {"species": "Maïs", "function": "Domestication — architecture", "ref": "Doebley 1997 Nature"},
+        },
+    },
+    "🛡️ Résistance pathogènes": {
+        "description": "Gènes de résistance",
+        "genes": {
+            "Xa21": {"species": "Riz", "function": "Résistance Xanthomonas", "ref": "Song 1995 Science"},
+            "Pi-ta": {"species": "Riz", "function": "Résistance Magnaporthe", "ref": "Bryan 2000 Plant Cell"},
+            "Pi54": {"species": "Riz", "function": "Résistance blast", "ref": "Sharma 2005"},
+            "Lr34": {"species": "Blé", "function": "Résistance rouille", "ref": "Krattinger 2009 Science"},
+            "Mlo": {"species": "Orge/Blé", "function": "Résistance oïdium", "ref": "Büschges 1997 Cell"},
+            "Rpg1": {"species": "Orge", "function": "Résistance stem rust", "ref": "Brueggeman 2002 PNAS"},
+        },
+    },
+    "💧 Tolérance sécheresse": {
+        "description": "Réponse au stress hydrique",
+        "genes": {
+            "DREB1A": {"species": "Arabidopsis/Multiple", "function": "Facteur transcription drought", "ref": "Liu 1998 Plant Cell"},
+            "DREB2A": {"species": "Multiple", "function": "Déshydratation", "ref": "Sakuma 2006 Plant Cell"},
+            "NAC": {"species": "Multiple", "function": "Stress abiotique (SNAC1)", "ref": "Hu 2006 PNAS"},
+            "LEA": {"species": "Multiple", "function": "Protéines embryogenèse tardive", "ref": "Hundertmark 2008"},
+            "OsNAC10": {"species": "Riz", "function": "Sécheresse + rendement", "ref": "Jeong 2010 Plant Physiol"},
+            "HVA1": {"species": "Orge/Riz", "function": "Protéine LEA type 3", "ref": "Xu 1996 Plant Physiol"},
+        },
+    },
+    "🧪 Qualité nutritionnelle": {
+        "description": "Amélioration valeur nutritive",
+        "genes": {
+            "Wx": {"species": "Riz/Maïs", "function": "Amylose", "ref": "Wang 1990 Plant J"},
+            "GPC-B1": {"species": "Blé", "function": "Protéines du grain", "ref": "Uauy 2006 Science"},
+            "ZIP": {"species": "Multiple", "function": "Zinc transporteur", "ref": "Multiple"},
+            "NAS": {"species": "Multiple", "function": "Fer (nicotianamine)", "ref": "Curie 2009 Plant J"},
+            "PSY1": {"species": "Maïs", "function": "Provitamine A", "ref": "Paine 2005 Nat Biotechnol"},
+            "CRTISO": {"species": "Riz", "function": "Caroténoïdes (Golden Rice)", "ref": "Ye 2000 Science"},
+        },
+    },
+    "🌿 Architecture plante": {
+        "description": "Morphologie",
+        "genes": {
+            "PROG1": {"species": "Riz", "function": "Érection plante", "ref": "Jin 2008 Nat Genet"},
+            "SPL14": {"species": "Riz", "function": "Nombre talles/panicules", "ref": "Miura 2010 Nat Genet"},
+            "MOC1": {"species": "Riz", "function": "Initiation talles", "ref": "Li 2003 Nature"},
+            "LAZY1": {"species": "Riz", "function": "Gravitropisme", "ref": "Yoshihara 2007 Plant Cell"},
+        },
+    },
+    "⏱️ Floraison / Maturité": {
+        "description": "Contrôle floraison",
+        "genes": {
+            "Hd1": {"species": "Riz", "function": "Photopériode", "ref": "Yano 2000 Plant Cell"},
+            "Hd3a": {"species": "Riz", "function": "Florigène", "ref": "Kojima 2002 Plant Cell Physiol"},
+            "Ehd1": {"species": "Riz", "function": "Floraison précoce", "ref": "Doi 2004 Genes Dev"},
+            "Ghd7": {"species": "Riz", "function": "Floraison + rendement", "ref": "Xue 2008 Nat Genet"},
+            "Vrn1": {"species": "Blé/Orge", "function": "Vernalisation", "ref": "Yan 2003 PNAS"},
+        },
+    },
+}
+
+DOMESTICATION_GENES = {
+    "Maïs": {"tb1": "Ramification (teosinte → maïs)", "tga1": "Gaine de la graine",
+             "bt2": "Poids du grain", "sh2": "Qualité sucrée", "su1": "Amylose"},
+    "Riz": {"sh4": "Non-shattering", "qSH1": "Dispersion des graines",
+            "PROG1": "Érection", "Wx": "Amylose", "Gn1a": "Nombre de grains"},
+    "Blé": {"Q": "Fragilité épi", "Br": "Couleur rachis", "Vrn1": "Vernalisation",
+            "Rht-B1": "Hauteur (gène nain)", "Gpc-B1": "Protéines du grain"},
+    "Soja": {"GmFT2a": "Floraison", "E1": "Maturité", "Dt1": "Détermination"},
+    "Tomate": {"sp": "Détermination", "u": "Forme du fruit", "fas": "Locules/taille",
+               "lc": "Taille du fruit"},
+}
+
+AGRONOMIC_DATABASES = {
+    "Gramene": {"url": "https://www.gramene.org/", "api": "https://data.gramene.org/v69/",
+                "description": "Ressource comparative génomique plantes",
+                "species": ["Riz","Maïs","Blé","Orge","Sorgho","Arabidopsis"]},
+    "MaizeGDB": {"url": "https://www.maizegdb.org/", "api": "https://www.maizegdb.org/api/",
+                 "description": "Base de données Maïs", "species": ["Maïs"]},
+    "RAP-DB": {"url": "https://rapdb.dna.affrc.go.jp/", "api": "https://rapdb.dna.affrc.go.jp/api/",
+               "description": "Rice Annotation Project Database", "species": ["Riz"]},
+    "Phytozome": {"url": "https://phytozome-next.jgi.doe.gov/", "api": "https://phytozome.jgi.doe.gov/",
+                  "description": "Portail génomique plantes JGI", "species": ["Multi"]},
+    "TAIR": {"url": "https://www.arabidopsis.org/", "api": "https://www.arabidopsis.org/api/",
+             "description": "The Arabidopsis Information Resource", "species": ["Arabidopsis"]},
+    "SoyBase": {"url": "https://www.soybase.org/", "api": "https://www.soybase.org/api/",
+                "description": "Base de données Soja", "species": ["Soja"]},
+    "WheatIS": {"url": "https://wheatis.org/", "api": "https://wheatis.triticeaetoolbox.org/",
+                "description": "Wheat Information System", "species": ["Blé"]},
+}
+
+PLANT_ML_TOOLS = {
+    "CRISPR-P 2.0": {"url": "http://crispr.hzau.edu.cn/CRISPR2/",
+        "description": "Design sgRNA optimisé plantes", "reference": "Liu 2017 Mol Plant",
+        "species": ["Riz","Arabidopsis","Maïs","Blé"]},
+    "CHOPCHOP v3": {"url": "https://chopchop.cbu.uib.no/",
+        "description": "Multi-organismes + visualisation", "reference": "Labun 2019 NAR",
+        "species": ["Multi"]},
+    "PlantCAD": {"url": "https://huggingface.co/kuleshov-group/PlantCAD",
+        "description": "DNA language model plantes", "reference": "Zhai 2024 bioRxiv",
+        "species": ["Multi"]},
+    "CRISPR-PLANT": {"url": "https://www.genome.arizona.edu/crispr/",
+        "description": "Base sgRNA pré-calculés", "reference": "Multiple",
+        "species": ["Riz","Maïs","Arabidopsis","Blé","Sorgho"]},
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CRISPR — FONCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 def download_doench_2016(force=False):
-    """Télécharge Doench 2016 réel depuis GitHub (cache local)."""
     cache_file = CACHE_DIR / "doench_2016.parquet"
     if cache_file.exists() and not force and PYARROW_AVAILABLE:
         try: return pd.read_parquet(cache_file)
         except: pass
-
     for url in DOENCH_2016_URLS:
         try:
             r = requests.get(url, timeout=30)
@@ -725,10 +847,8 @@ def download_doench_2016(force=False):
             col_map = {}
             for c in df.columns:
                 cl = c.lower()
-                if any(k in cl for k in ['sgrna', 'guide_seq', 'seq', 'guide']):
-                    col_map[c] = 'guide'
-                elif any(k in cl for k in ['eff', 'score', 'value']):
-                    col_map[c] = 'efficiency'
+                if any(k in cl for k in ['sgrna','guide_seq','seq','guide']): col_map[c] = 'guide'
+                elif any(k in el for el in ['eff','score','value']): col_map[c] = 'efficiency'
             df = df.rename(columns=col_map)
             if 'guide' in df.columns and 'efficiency' in df.columns:
                 df['guide'] = df['guide'].astype(str).str.upper().str.strip()
@@ -740,16 +860,14 @@ def download_doench_2016(force=False):
                     emin, emax = df['efficiency'].min(), df['efficiency'].max()
                     df['efficiency'] = (df['efficiency'] - emin) / (emax - emin)
                 if PYARROW_AVAILABLE:
-                    try: df[['guide', 'efficiency']].to_parquet(cache_file)
+                    try: df[['guide','efficiency']].to_parquet(cache_file)
                     except: pass
-                return df[['guide', 'efficiency']].reset_index(drop=True)
+                return df[['guide','efficiency']].reset_index(drop=True)
         except Exception: continue
-    # Fallback
     return pd.DataFrame(DOENCH_2016_BUILTIN, columns=["guide", "efficiency"])
 
 def download_chromosome(genome="hg38", chrom="chr21", progress_callback=None):
-    """Télécharge un chromosome réel depuis UCSC."""
-    if genome not in UCSC_GENOMES: return None, f"Génome non supporté"
+    if genome not in UCSC_GENOMES: return None, "Génome non supporté"
     cache_file = CACHE_DIR / f"{genome}_{chrom}.fa.gz"
     if cache_file.exists():
         try:
@@ -776,22 +894,37 @@ def download_chromosome(genome="hg38", chrom="chr21", progress_callback=None):
     except Exception as e:
         return None, f"Erreur : {e}"
 
-def download_gene_region(genome="hg38", chrom="chr17", start=None, end=None, flank=10000):
-    """Télécharge une région génomique via API UCSC."""
-    if start is None or end is None: return None, "start/end requis"
-    rs, re_ = max(0, start-flank), end+flank
-    url = f"https://api.genome.ucsc.edu/getData/sequence?genome={genome};chrom={chrom};start={rs};end={re_}"
+def download_plant_chromosome(genome_name, chrom, progress_callback=None):
+    if genome_name not in PLANT_GENOMES: return None, "Génome non supporté"
+    info = PLANT_GENOMES[genome_name]
+    cache_file = CACHE_DIR / f"plant_{info['organism']}_{chrom}.fa.gz"
+    if cache_file.exists():
+        try:
+            with gzip.open(cache_file, "rt") as f:
+                seq = "".join(l.strip().upper() for l in f if not l.startswith(">"))
+            return seq, None
+        except: pass
+    pattern = info["pattern"].format(chrom=chrom)
+    url = info["url_base"] + pattern
     try:
-        r = requests.get(url, timeout=30)
-        if r.status_code == 200:
-            return r.json().get("dna", "").upper(), None
-        return None, f"HTTP {r.status_code}"
+        if progress_callback: progress_callback(0.0, f"Téléchargement {chrom}...")
+        r = requests.get(url, stream=True, timeout=240)
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code} — essayez Phytozome ou Gramene"
+        total = int(r.headers.get('content-length', 0))
+        chunks, dl = [], 0
+        for chunk in r.iter_content(65536):
+            chunks.append(chunk); dl += len(chunk)
+            if progress_callback and total > 0:
+                progress_callback(dl/total, f"{dl//1024//1024}MB / {total//1024//1024}MB")
+        data = b"".join(chunks)
+        with open(cache_file, "wb") as f: f.write(data)
+        content = gzip.decompress(data).decode("utf-8", errors="ignore")
+        seq = "".join(l.strip().upper() for l in content.split("\n") if not l.startswith(">"))
+        return seq, None
     except Exception as e:
         return None, f"Erreur : {e}"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — UTILITAIRES
-# ══════════════════════════════════════════════════════════════════════════════
 def reverse_complement(seq):
     c = {'A':'T','T':'A','G':'C','C':'G','N':'N','U':'A'}
     return ''.join(c.get(b.upper(), 'N') for b in reversed(seq))
@@ -835,25 +968,18 @@ def get_chrom_color(chrom):
     if chrom in CHROM_COLORS: return CHROM_COLORS[chrom]
     return f"#{hash(chrom) % 0xFFFFFF:06X}"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — SCORING RÉEL (CFD, MIT)
-# ══════════════════════════════════════════════════════════════════════════════
 def cfd_score_real(guide, offtarget):
-    """Score CFD Doench 2016 — matrice réelle."""
     if len(guide) != len(offtarget): return 0.0
-    g = guide.upper().replace('U', 'T')
-    o = offtarget.upper().replace('U', 'T')
+    g = guide.upper().replace('U', 'T'); o = offtarget.upper().replace('U', 'T')
     score = 1.0
     for i in range(min(20, len(g))):
         if g[i] != o[i]:
             if g[i] in CFD_MISMATCH_MATRIX and o[i] in CFD_MISMATCH_MATRIX[g[i]]:
                 score *= (1.0 - CFD_MISMATCH_MATRIX[g[i]][o[i]][i])
-            else:
-                score *= 0.5
+            else: score *= 0.5
     return round(max(0.0, min(1.0, score)), 4)
 
 def mit_specificity_score(guide, offtarget):
-    """MIT specificity score (Hsu 2013)."""
     if len(guide) != len(offtarget): return 0.0
     g = guide.upper(); o = offtarget.upper()
     score = 100.0
@@ -862,7 +988,6 @@ def mit_specificity_score(guide, offtarget):
     return round(score, 2)
 
 def score_guide_doench_like(guide):
-    """Score heuristique Doench-like (fallback)."""
     if len(guide) < 15: return 0.0
     gc = gc_content(guide)
     gc_score = (1.0 - abs(gc - 0.55) * 2) if 0.4 <= gc <= 0.7 else 0.2
@@ -871,9 +996,6 @@ def score_guide_doench_like(guide):
     homo = 0.3 if has_homopolymer(guide, 5) else 0.0
     return round(max(0.0, min(1.0, 0.5*gc_score + p20 - poly_t - homo)), 3)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — DESIGN sgRNA
-# ══════════════════════════════════════════════════════════════════════════════
 def find_pam_sites(sequence, pam="NGG", guide_len=20, pam_side="3'"):
     seq = sequence.upper().replace('U', 'T')
     results = []
@@ -1004,11 +1126,11 @@ def simulate_doubled_haploids(n_loci=3, n_generations=8, n_individuals=500, self
 def generate_crispr_protocol(gene_name, guides_df, cas_variant="SpCas9 (NGG)"):
     if guides_df is None or guides_df.empty: return "Aucun guide."
     top = guides_df.iloc[0]
-    guide = top["Guide (5'→3')"]; pam = top["PAM"]; pos = top["Position"]
+    guide = top["Guide (5'→3')"]
     return f"""# PROTOCOLE CRISPR — {gene_name}
 Généré : {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
-## Variant : {cas_variant} | PAM : {pam} | Position : {pos}
+## Variant : {cas_variant} | PAM : {top['PAM']} | Position : {top['Position']}
 
 ## Guide : 5'-{guide}-3'
 ## ARN  : 5'-{dna_to_rna(guide)}-3'
@@ -1033,9 +1155,7 @@ Reverse : 5'-AAAC{reverse_complement(guide)}C-3'
 - PCR + T7 endonuclease I + Sanger/TIDE
 """
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — HDR (modèle publié)
-# ══════════════════════════════════════════════════════════════════════════════
+# HDR
 def check_silent_mutation(seq_ref, seq_alt, mut_pos, frame=0):
     cs = ((mut_pos - frame) // 3) * 3 + frame
     if cs + 3 > len(seq_ref): return False, "—", "—"
@@ -1119,7 +1239,6 @@ def design_hdr_plasmid(target_seq, cut_pos, insert_seq, arm_length=600, insert_n
 
 def predict_hdr_efficiency_real(arm_length, edit_type, cell_cycle="asynchrone",
                                   cell_type="iPSC", pam_mutated=False):
-    """Modèle publié : Richardson 2016, Yeh 2019, Kwart 2017."""
     if edit_type == "substitution": base = 15.0
     elif edit_type == "insertion": base = 10.0 if arm_length < 100 else 5.0
     else: base = 8.0
@@ -1136,17 +1255,14 @@ def predict_hdr_efficiency_real(arm_length, edit_type, cell_cycle="asynchrone",
     eff = min(base * cycle_bonus * cell_factor * pam_bonus, 85.0)
     recos = []
     if arm_length < 30: recos.append("Bras ≥ 30 nt (Richardson 2016)")
-    if cell_cycle == "asynchrone": recos.append("Sync S/G2 (nocodazole) → 1.8x")
+    if cell_cycle == "asynchrone": recos.append("Sync S/G2 → 1.8x")
     if not pam_mutated: recos.append("Ajouter mutation silencieuse PAM")
-    if cell_type in ["T cells", "Primary cells"]: recos.append("AAV6 ou RNP+ssODN")
     return {"efficacité_pct": round(eff, 1),
             "niveau": ("🟢 Élevé" if eff > 30 else "🟡 Modéré" if eff > 15 else "🟠 Faible"),
             "reference": "Richardson 2016, Yeh 2019, Kwart 2017",
             "recommandations": recos}
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — ML EFFICACITÉ (données réelles)
-# ══════════════════════════════════════════════════════════════════════════════
+# ML
 def extract_real_features(guide):
     g = guide.upper()
     feats = {}
@@ -1174,7 +1290,6 @@ def extract_real_features(guide):
     return feats
 
 def train_real_efficacy_model(df_doench, model_type="rf"):
-    """Entraîne un modèle sur données Doench 2016 réelles."""
     guides = df_doench["guide"].tolist()
     y = df_doench["efficiency"].values
     X_list = [extract_real_features(g) for g in guides]
@@ -1189,12 +1304,10 @@ def train_real_efficacy_model(df_doench, model_type="rf"):
                                         random_state=42, n_jobs=-1)
     model.fit(X_tr, y_tr)
     y_pred = model.predict(X_te)
-    metrics = {
-        "R²": round(r2_score(y_te, y_pred), 4),
-        "RMSE": round(float(np.sqrt(mean_squared_error(y_te, y_pred))), 4),
-        "MAE": round(float(mean_absolute_error(y_te, y_pred)), 4),
-        "N_train": len(X_tr), "N_test": len(X_te),
-    }
+    metrics = {"R²": round(r2_score(y_te, y_pred), 4),
+               "RMSE": round(float(np.sqrt(mean_squared_error(y_te, y_pred))), 4),
+               "MAE": round(float(mean_absolute_error(y_te, y_pred)), 4),
+               "N_train": len(X_tr), "N_test": len(X_te)}
     cv = cross_val_score(model, X, y, cv=5, scoring="r2")
     imp = pd.DataFrame({"Feature": X_df.columns,
                         "Importance": model.feature_importances_}
@@ -1203,7 +1316,7 @@ def train_real_efficacy_model(df_doench, model_type="rf"):
             "metrics": metrics, "cv_r2_mean": round(cv.mean(), 4),
             "cv_r2_std": round(cv.std(), 4), "feature_importance": imp,
             "training_data": df_doench.shape[0],
-            "source": "Doench 2016 (Nature Biotechnology)"}
+            "source": "Doench 2016"}
 
 def predict_efficacy_ml(guides_list, model, feature_names):
     rows = []
@@ -1224,9 +1337,7 @@ def predict_efficacy_ml(guides_list, model, feature_names):
                                 else "🟠 Moyen" if pred > 0.35 else "🔴 Faible")})
     return pd.DataFrame(rows).sort_values("Efficacité prédite", ascending=False)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — OFF-TARGET GENOME-WIDE
-# ══════════════════════════════════════════════════════════════════════════════
+# Off-target
 def build_kmer_index(genome, k=12, progress_callback=None):
     index = defaultdict(list)
     total = sum(len(seq) for seq in genome.values())
@@ -1315,9 +1426,7 @@ def analyze_guide_offtargets(guide, genome, pam="NGG", max_mismatch=4, top_n=100
                "specificity_score": round(1.0 - min(1.0, n_high*0.5 + n_mod*0.1), 3)}
     return summary, sorted(hits, key=lambda h: (h["mismatches"], -h["cfd_score"]))[:top_n]
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — DASHBOARD COMPARATIF
-# ══════════════════════════════════════════════════════════════════════════════
+# Dashboard
 def compute_guide_criteria(g, sequence=None, ot_hits=None):
     crit = {}
     crit["Doench"] = score_guide_doench_like(g)
@@ -1376,9 +1485,6 @@ def build_comparison_table(guides_list, sequence=None, ot_dict=None):
                                          else "🟠 Alternatif" if gs >= 0.35 else "🔴 À éviter")})
     return pd.DataFrame(rows).sort_values("Score global", ascending=False)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — VISUALISATION GÉNOMIQUE
-# ══════════════════════════════════════════════════════════════════════════════
 def plot_genome_ideogram(hits, genome, title="Cartographie"):
     if not hits: return go.Figure().update_layout(template="plotly_dark", title="Aucun hit")
     df = pd.DataFrame(hits); df = df[df["chrom"].isin(genome.keys())]
@@ -1412,12 +1518,7 @@ def plot_genome_ideogram(hits, genome, title="Cartographie"):
                       yaxis=dict(showticklabels=False, gridcolor="#2A3550"))
     return fig
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — BENCHMARK (données réelles)
-# ══════════════════════════════════════════════════════════════════════════════
 def run_real_benchmark(model_bundle, df_bench):
-    """Benchmark sur données réelles avec comparaison baselines publiées."""
-    from sklearn.metrics import r2_score, mean_squared_error
     guides = df_bench["guide"].tolist()
     y_true = df_bench["efficiency"].values
     feat_names = model_bundle["feature_names"]
@@ -1427,20 +1528,16 @@ def run_real_benchmark(model_bundle, df_bench):
         if c not in X_df.columns: X_df[c] = 0.0
     X_df = X_df[feat_names]
     y_pred = model_bundle["model"].predict(X_df.values)
-
     metrics = {"R²": round(r2_score(y_true, y_pred), 4),
                "RMSE": round(float(np.sqrt(mean_squared_error(y_true, y_pred))), 4),
                "MAE": round(float(mean_absolute_error(y_true, y_pred)), 4),
                "Pearson r": round(pearsonr(y_true, y_pred)[0], 4),
                "Spearman ρ": round(spearmanr(y_true, y_pred)[0], 4),
                "N": len(y_true)}
-
     df_pred = pd.DataFrame({"Guide": guides, "Efficacité réelle": y_true,
                             "Efficacité prédite": y_pred,
                             "Erreur absolue": np.abs(y_true - y_pred)}
                            ).sort_values("Erreur absolue")
-
-    # Baselines
     baselines = {
         "GC optimal": np.array([max(0.0, 1.0 - abs(gc_content(g) - 0.5) * 3) for g in guides]),
         "Doench-like": np.array([score_guide_doench_like(g) for g in guides]),
@@ -1452,18 +1549,12 @@ def run_real_benchmark(model_bundle, df_bench):
                         "RMSE": round(float(np.sqrt(mean_squared_error(y_true, p))), 4),
                         "Pearson r": round(pearsonr(y_true, p)[0], 4)})
     bl_df = pd.DataFrame(bl_rows)
-
-    # Ajouter le ML
     bl_df = pd.concat([pd.DataFrame([{
         "Prédicteur": "🌲 Modèle ML (Doench trained)",
         "R²": metrics["R²"], "RMSE": metrics["RMSE"], "Pearson r": metrics["Pearson r"]}]),
         bl_df]).sort_values("R²", ascending=False).reset_index(drop=True)
-
     return {"metrics_ml": metrics, "predictions": df_pred, "comparison": bl_df}
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — EXPORT BIOSTRUCT
-# ══════════════════════════════════════════════════════════════════════════════
 def export_to_biostruct(genes=None, guides=None, targets=None):
     exp = {"format": "MetaInsight_to_BioStruct", "version": "1.0",
            "timestamp": datetime.now().isoformat(), "source": "MetaInsight_v9"}
@@ -1473,13 +1564,136 @@ def export_to_biostruct(genes=None, guides=None, targets=None):
     return json.dumps(exp, indent=2, default=str)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODULE CRISPR — RENDU STREAMLIT (14 SOUS-ONGLETS)
+# PLANT — FONCTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+def list_plant_genomes():
+    rows = []
+    for name, info in PLANT_GENOMES.items():
+        rows.append({"Génome": name, "Organisme": info["organism"],
+                     "Assembly": info["assembly"], "Ploidie": info["ploidy"],
+                     "Chromosomes": len(info["chroms"]), "Taille (MB)": info["size_mb"],
+                     "Importance": info["importance"]})
+    return pd.DataFrame(rows)
+
+def query_gramene(gene_name, limit=5):
+    try:
+        url = f"https://data.gramene.org/v69/genes?idList={gene_name}&rows={limit}"
+        r = requests.get(url, headers={"Accept": "application/json"}, timeout=15)
+        if r.status_code == 200: return {"status": "ok", "data": r.json()}
+        return {"status": "fallback", "data": {"url": f"https://www.gramene.org/search?query={gene_name}"}}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+def query_maizegdb(gene_name):
+    try:
+        url = f"https://www.maizegdb.org/api/locus/{gene_name}"
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200: return {"status": "ok", "data": r.json()}
+        return {"status": "fallback", "data": {"url": f"https://www.maizegdb.org/search?query={gene_name}"}}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+def query_rapdb(gene_name):
+    try:
+        url = f"https://rapdb.dna.affrc.go.jp/api/gene?id={gene_name}"
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200: return {"status": "ok", "data": r.json()}
+        return {"status": "fallback", "data": {"url": f"https://rapdb.dna.affrc.go.jp/search?query={gene_name}"}}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+def query_agronomic_gene(gene_name, database="Gramene"):
+    if database == "Gramene": return query_gramene(gene_name)
+    elif database == "MaizeGDB": return query_maizegdb(gene_name)
+    elif database == "RAP-DB": return query_rapdb(gene_name)
+    else: return {"status": "fallback", "data": {"url": AGRONOMIC_DATABASES.get(database, {}).get("url", "")}}
+
+def recommend_plant_cas_variant(crop="Riz", application="KO"):
+    recos = {
+        "Riz": {"KO": ("SpCas9 (NGG)", "Bien établi, PAM fréquent")},
+        "Maïs": {"KO": ("SpCas9 + morphogenic", "Nécessite Bbm/Wus2")},
+        "Blé": {"KO": ("SpCas9 + morphogenic", "Bbm/Wus2 recommandés")},
+        "Arabidopsis": {"KO": ("SpCas9 (NGG)", "Modèle établi")},
+        "Soja": {"KO": ("SpCas9 (NGG)", "Standard soja")},
+        "Tomate": {"KO": ("SpCas9 (NGG)", "Standard tomate")},
+    }
+    variant, raison = recos.get(crop, recos["Riz"]).get(application, recos["Riz"]["KO"])
+    return {"variant": variant, "raison": raison}
+
+def analyze_field_trial(df_trial, genotype_col="genotype", env_col="environment",
+                         trait_col="trait_value"):
+    results = {}
+    df = df_trial.copy()
+    required = [genotype_col, env_col, trait_col]
+    missing = [c for c in required if c not in df.columns]
+    if missing: return {"error": f"Colonnes manquantes : {missing}"}
+    results["n_obs"] = len(df)
+    results["n_genotypes"] = df[genotype_col].nunique()
+    results["n_environments"] = df[env_col].nunique()
+    results["mean_trait"] = round(float(df[trait_col].mean()), 3)
+    results["std_trait"] = round(float(df[trait_col].std()), 3)
+    try:
+        from scipy.stats import f_oneway
+        geno_groups = [g[trait_col].values for _, g in df.groupby(genotype_col)]
+        f_geno, p_geno = f_oneway(*geno_groups) if len(geno_groups) > 1 else (0, 1)
+        env_groups = [g[trait_col].values for _, g in df.groupby(env_col)]
+        f_env, p_env = f_oneway(*env_groups) if len(env_groups) > 1 else (0, 1)
+        results["F_genotype"] = round(float(f_geno), 3)
+        results["p_genotype"] = round(float(p_geno), 6)
+        results["F_environment"] = round(float(f_env), 3)
+        results["p_environment"] = round(float(p_env), 6)
+    except: pass
+    try:
+        total_var = df[trait_col].var()
+        geno_means = df.groupby(genotype_col)[trait_col].mean()
+        var_geno = geno_means.var()
+        env_means = df.groupby(env_col)[trait_col].mean()
+        var_env = env_means.var()
+        var_ge = max(0, total_var - var_geno - var_env)
+        results["var_total"] = round(float(total_var), 4)
+        results["var_genotype"] = round(float(var_geno), 4)
+        results["var_environment"] = round(float(var_env), 4)
+        results["var_GxE"] = round(float(var_ge), 4)
+        if total_var > 0: results["H2_broad"] = round(float(var_geno / total_var), 3)
+    except: pass
+    stability = []
+    for geno, g in df.groupby(genotype_col):
+        cv = g[trait_col].std() / max(g[trait_col].mean(), 1e-9)
+        stability.append({"Génotype": geno, "Moyenne": round(g[trait_col].mean(), 3),
+                          "Écart-type": round(g[trait_col].std(), 3), "CV": round(cv, 3),
+                          "Stabilité": "🟢 Élevée" if cv < 0.15 else "🟡 Moyenne" if cv < 0.30 else "🔴 Faible"})
+    results["stability"] = pd.DataFrame(stability).sort_values("CV")
+    results["best_genotypes"] = results["stability"].head(5)
+    return results
+
+def plant_crispr_recommendations(gene_name, crop="Riz"):
+    trait_info = None
+    for cat_name, cat in AGRONOMIC_TRAITS.items():
+        if gene_name in cat["genes"]:
+            trait_info = {"catégorie": cat_name, "fonction": cat["genes"][gene_name]["function"],
+                          "référence": cat["genes"][gene_name]["ref"],
+                          "espèce_source": cat["genes"][gene_name]["species"]}
+            break
+    cas_reco = recommend_plant_cas_variant(crop, "KO")
+    return {"gène": gene_name, "culture": crop, "trait_info": trait_info,
+            "variant_Cas_recommandé": cas_reco["variant"],
+            "raison_variant": cas_reco["raison"],
+            "considérations": [
+                f"Ploidie {PLANT_GENOMES.get(crop, {}).get('ploidy', 'N/A')}",
+                "Vérifier PAM dans la région cible",
+                "Éviter régions répétées (polyploïdes)",
+                "Morphogenic factors (Bbm/Wus2) pour maïs/blé",
+                "Off-target sur génome complet (grande taille)"],
+            "references": ["Wolter 2018", "Zhang 2017", "Li 2020"]}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RENDU : CRISPR
 # ══════════════════════════════════════════════════════════════════════════════
 def render_crispr_tab():
     st.markdown("## ✂️ CRISPR Design & Delivery <span class='badge-new'>RÉEL</span>", unsafe_allow_html=True)
     st.markdown("""<div class="ref-box">
-    📚 Données RÉELLES : Doench 2016 (2333 guides publiés) · Génomes UCSC (hg38, mm10...) ·
-    Scoring CFD + MIT publiés · Modèle HDR multi-facteurs (Richardson 2016).
+    📚 Données RÉELLES : Doench 2016 · Génomes UCSC · Scoring CFD + MIT · Modèle HDR publié.
+    Modèles 2024-2026 : CRISPR_HNN, CrisprFusion, CCLMoff, PRIDICT2.0.
     </div>""", unsafe_allow_html=True)
 
     crispr_tabs = st.tabs([
@@ -1490,7 +1704,6 @@ def render_crispr_tab():
         "🗺️ Cartographie", "🎓 Benchmark Doench 2016",
     ])
 
-    # 1. SÉLECTION GÈNES
     with crispr_tabs[0]:
         st.markdown("### 🎯 Sélection des gènes cibles")
         c1, c2 = st.columns(2)
@@ -1501,7 +1714,6 @@ def render_crispr_tab():
                     if br is not None and not br.empty:
                         st.session_state.crispr_genes = br.head(60).to_dict("records")
                         st.success(f"✅ {len(st.session_state.crispr_genes)} gènes")
-                else: st.warning("Lancez d'abord les biomarqueurs ROC")
         with c2:
             if st.button("📥 Depuis Random Forest", key="cg_rf"):
                 df = st.session_state.get("df_microbiome")
@@ -1513,7 +1725,6 @@ def render_crispr_tab():
         if st.session_state.get("crispr_genes"):
             st.dataframe(pd.DataFrame(st.session_state.crispr_genes), use_container_width=True)
 
-    # 2. DESIGN sgRNA
     with crispr_tabs[1]:
         st.markdown("### 🧬 Design de sgRNA")
         c1, c2 = st.columns([3, 1])
@@ -1544,7 +1755,6 @@ def render_crispr_tab():
             st.download_button("📥 CSV guides", df_g.to_csv(index=False).encode(),
                               "crispr_guides.csv", "text/csv")
 
-    # 3. MULTIPLEX
     with crispr_tabs[2]:
         st.markdown("### 🔗 Design Multiplexé")
         gtxt = st.text_area("Format : NOM|SÉQUENCE par ligne",
@@ -1568,7 +1778,6 @@ def render_crispr_tab():
                     st.success(f"✅ {len(df_mx)} guides multiplexés")
                     st.dataframe(df_mx, use_container_width=True)
 
-    # 4. ÉDITION → PHÉNOTYPE
     with crispr_tabs[3]:
         st.markdown("### 🎨 Prédiction édition → phénotype")
         if st.session_state.get("crispr_guides") is None:
@@ -1585,7 +1794,6 @@ def render_crispr_tab():
                 c3.metric("Nb gènes", pred["nb_gènes"])
                 st.info(pred["interprétation"])
 
-    # 5. LIVRAISON
     with crispr_tabs[4]:
         st.markdown("### 🚚 Livraison")
         c1, c2 = st.columns(2)
@@ -1597,7 +1805,6 @@ def render_crispr_tab():
                          use_container_width=True)
             st.success(f"🏆 Recommandé : {df_del.iloc[0]['Vecteur']}")
 
-    # 6. HAPLOÏDES DOUBLÉS
     with crispr_tabs[5]:
         st.markdown("### 🌱 Haploïdes Doublés")
         c1, c2, c3 = st.columns(3)
@@ -1613,7 +1820,6 @@ def render_crispr_tab():
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df_dh, use_container_width=True)
 
-    # 7. PROTOCOLE
     with crispr_tabs[6]:
         st.markdown("### 📋 Protocole expérimental")
         if st.session_state.get("crispr_guides") is None:
@@ -1629,7 +1835,6 @@ def render_crispr_tab():
                 st.download_button("📥 Protocole", st.session_state.crispr_protocol.encode(),
                                    "crispr_protocol.md")
 
-    # 8. EXPORT BIOSTRUCT
     with crispr_tabs[7]:
         st.markdown("### 🔗 Export BioStruct")
         if st.button("📤 Générer JSON", type="primary", key="exp_btn"):
@@ -1645,9 +1850,8 @@ def render_crispr_tab():
             st.download_button("📥 JSON", st.session_state.crispr_export.encode(),
                               "metainsight_to_biostruct.json", "application/json")
 
-    # 9. HDR
     with crispr_tabs[8]:
-        st.markdown("### 🧬 HDR Knock-in (modèle publié)")
+        st.markdown("### 🧬 HDR Knock-in")
         mode = st.radio("Mode", ["ssODN", "Plasmide"], horizontal=True, key="hdr_mode")
         seq_h = st.text_area("Séquence",
             value=("ATGGATTTATCTGCTCTTCGCGTTGAAGAAGTACAAAATGTCATTAATGCTATGCAGAAAATCTTAGAGTGT"
@@ -1669,7 +1873,6 @@ def render_crispr_tab():
             if st.button("🚀 Designer ssODN", type="primary", key="hdr_ss_btn"):
                 clean = "".join(c for c in seq_h.upper() if c in "ACGT")
                 donor = design_hdr_ssodn(clean, int(cut_p), et, ep, al, bp)
-                st.session_state.hdr_donor = donor
                 st.success(f"✅ ssODN : {donor['longueur_donneur']} nt")
                 st.code(donor["donneur_sense"], language="text")
                 c1, c2, c3, c4 = st.columns(4)
@@ -1680,11 +1883,7 @@ def render_crispr_tab():
                 for w in donor["avertissements"]: st.warning(w)
                 pred = predict_hdr_efficiency_real(al, et, cyc, cell_t, bool(donor["mutations_PAM"]))
                 st.info(f"📊 Référence : {pred['reference']}")
-                c_a, c_b = st.columns(2)
-                c_a.metric("Efficacité HDR", f"{pred['efficacité_pct']}%", delta=pred["niveau"])
-                with c_b:
-                    st.markdown("**Recommandations**")
-                    for r in pred["recommandations"]: st.markdown(f"- {r}")
+                st.metric("Efficacité HDR", f"{pred['efficacité_pct']}%", delta=pred["niveau"])
         else:
             tag = st.selectbox("Tag", list(PROTEIN_TAGS.keys()), key="hdr_tag")
             al2 = st.slider("Bras (bp)", 200, 1500, 600, 50, key="hdr_al2")
@@ -1692,53 +1891,32 @@ def render_crispr_tab():
                 clean = "".join(c for c in seq_h.upper() if c in "ACGT")
                 donor = design_hdr_plasmid(clean, int(cut_p), PROTEIN_TAGS[tag]["seq"], al2, tag)
                 st.success(f"✅ Plasmide : {donor['longueur_totale']} bp")
-                st.dataframe(pd.DataFrame([
-                    {"Région":"Bras G","Sens":"Fwd","Séq":donor["amorces_bras_gauche"]["Fwd"]},
-                    {"Région":"Bras G","Sens":"Rev","Séq":donor["amorces_bras_gauche"]["Rev"]},
-                    {"Région":"Bras D","Sens":"Fwd","Séq":donor["amorces_bras_droit"]["Fwd"]},
-                    {"Région":"Bras D","Sens":"Rev","Séq":donor["amorces_bras_droit"]["Rev"]},
-                ]), use_container_width=True)
 
-    # 10. ML EFFICACITÉ (données réelles)
     with crispr_tabs[9]:
-        st.markdown("### 🤖 ML Efficacité — Entraînement sur données RÉELLES")
+        st.markdown("### 🤖 ML Efficacité")
         ml_subs = st.tabs(["🌐 Télécharger Doench", "🎓 Entraîner", "🔮 Prédire", "📊 Perf"])
-
         with ml_subs[0]:
-            st.markdown("#### 📚 Dataset Doench 2016 RÉEL (2333 guides)")
-            st.markdown("Source : Addgene + GitHub (Doench et al. 2016, Nat Biotech)")
+            st.markdown("#### 📚 Dataset Doench 2016 RÉEL")
             if st.button("🌐 Télécharger Doench 2016 réel", type="primary", key="dl_doench"):
-                with st.spinner("Téléchargement depuis GitHub..."):
+                with st.spinner("Téléchargement..."):
                     df_real = download_doench_2016(force=True)
                 st.session_state.doench_real = df_real
-                st.success(f"✅ {len(df_real)} guides réels chargés")
+                st.success(f"✅ {len(df_real)} guides réels")
                 st.dataframe(df_real.head(10), use_container_width=True)
-                if len(df_real) > 5:
-                    st.metric("Efficacité moyenne", f"{df_real['efficiency'].mean():.3f}")
-                    fig = px.histogram(df_real, x="efficiency", nbins=30,
-                                        template="plotly_dark",
-                                        title="Distribution des efficacités Doench 2016")
-                    st.plotly_chart(fig, use_container_width=True)
-            if st.session_state.get("doench_real") is not None:
-                df = st.session_state.doench_real
-                st.info(f"📊 Dataset chargé : {len(df)} guides · Efficacité moyenne : {df['efficiency'].mean():.3f}")
-
         with ml_subs[1]:
             if st.session_state.get("doench_real") is None:
-                st.warning("Téléchargez d'abord Doench 2016 (onglet précédent)")
+                st.warning("Téléchargez d'abord Doench 2016")
             else:
-                st.markdown(f"#### 🎓 Entraînement sur {len(st.session_state.doench_real)} guides")
                 model_type = st.selectbox("Modèle", ["rf", "xgb"], key="ml_mt")
-                if st.button("🚀 Entraîner le modèle", type="primary", key="train_real_btn"):
-                    with st.spinner(f"Entraînement sur {len(st.session_state.doench_real)} guides réels..."):
+                if st.button("🚀 Entraîner", type="primary", key="train_real_btn"):
+                    with st.spinner("Entraînement..."):
                         bundle = train_real_efficacy_model(st.session_state.doench_real, model_type)
                     st.session_state.ml_bundle = bundle
                     st.success(f"✅ Entraîné sur {bundle['training_data']} guides")
                     st.json(bundle["metrics"])
-
         with ml_subs[2]:
             if st.session_state.get("ml_bundle") is None:
-                st.warning("Entraînez d'abord un modèle")
+                st.warning("Entraînez d'abord")
             else:
                 g_in = st.text_area("Guides (un par ligne)", height=120, key="ml_pred_in",
                     value=("\n".join(st.session_state.crispr_guides["Guide (5'→3')"].head(5).tolist())
@@ -1751,7 +1929,6 @@ def render_crispr_tab():
                         st.dataframe(dfp.style.background_gradient(cmap="RdYlGn",
                                                                      subset=["Efficacité prédite"]),
                                      use_container_width=True)
-
         with ml_subs[3]:
             if st.session_state.get("ml_bundle"):
                 b = st.session_state.ml_bundle
@@ -1760,21 +1937,16 @@ def render_crispr_tab():
                 c2.metric("RMSE", b["metrics"]["RMSE"])
                 c3.metric("MAE", b["metrics"]["MAE"])
                 c4.metric("CV R²", f"{b['cv_r2_mean']} ± {b['cv_r2_std']}")
-                st.info(f"**Source** : {b['source']} · N = {b['training_data']}")
                 if not b["feature_importance"].empty:
-                    fig = px.bar(b["feature_importance"].head(20),
-                                 x="Importance", y="Feature", orientation="h",
-                                 template="plotly_dark", title="Top 20 features")
+                    fig = px.bar(b["feature_importance"].head(20), x="Importance", y="Feature",
+                                 orientation="h", template="plotly_dark", title="Top 20 features")
                     fig.update_layout(yaxis={"categoryorder": "total ascending"})
                     st.plotly_chart(fig, use_container_width=True)
 
-    # 11. OFF-TARGET (génomes UCSC réels)
     with crispr_tabs[10]:
-        st.markdown("### 🌐 Off-target génome-wide (UCSC réel)")
+        st.markdown("### 🌐 Off-target génome-wide")
         ot_subs = st.tabs(["📁 Génome", "🎯 Analyser"])
-
         with ot_subs[0]:
-            st.markdown("#### 🌐 Téléchargement UCSC")
             c1, c2 = st.columns(2)
             with c1: gn = st.selectbox("Génome", list(UCSC_GENOMES.keys()), key="ot_gn")
             with c2: ch = st.text_input("Chromosome", value="chr21", key="ot_ch")
@@ -1787,7 +1959,7 @@ def render_crispr_tab():
                 else:
                     st.session_state.ot_genome = {f"{gn}_{ch}": encode_sequence_2bit(seq)}
                     st.session_state.ot_index = None
-                    st.success(f"✅ {ch} : {len(seq):,} bp téléchargés")
+                    st.success(f"✅ {ch} : {len(seq):,} bp")
             if st.session_state.get("ot_genome"):
                 g = st.session_state.ot_genome
                 tot = sum(len(v) for v in g.values())
@@ -1795,13 +1967,9 @@ def render_crispr_tab():
                 c1.metric("Chromosome(s)", len(g))
                 c2.metric("Taille", f"{tot:,} bp")
                 if st.button("🔧 Construire l'index k-mer", key="ot_idx_btn"):
-                    progress = st.progress(0, text="Construction...")
-                    def cb2(frac, ch): progress.progress(min(1.0, frac), text=f"Index {ch}")
-                    with st.spinner("Construction de l'index (peut prendre 1-3 min)..."):
-                        st.session_state.ot_index = build_kmer_index(g, k=12, progress_callback=cb2)
-                    progress.empty()
+                    with st.spinner("Construction (1-3 min)..."):
+                        st.session_state.ot_index = build_kmer_index(g, k=12)
                     st.success(f"✅ {len(st.session_state.ot_index):,} k-mers")
-
         with ot_subs[1]:
             if st.session_state.get("ot_genome") is None or st.session_state.get("ot_index") is None:
                 st.warning("Chargez un génome et construisez l'index")
@@ -1815,7 +1983,7 @@ def render_crispr_tab():
                 if st.button("🔍 Rechercher", type="primary", key="ot_search_btn"):
                     if len(g_in.strip()) < 15: st.error("Guide trop court")
                     else:
-                        with st.spinner("Recherche off-target..."):
+                        with st.spinner("Recherche..."):
                             summary, hits = analyze_guide_offtargets(
                                 g_in.strip().upper(), st.session_state.ot_genome,
                                 pam="NGG", max_mismatch=mm, top_n=100)
@@ -1835,11 +2003,7 @@ def render_crispr_tab():
                                      .style.background_gradient(cmap="RdYlGn_r",
                                                                  subset=["mismatches","cfd_score"]),
                                      use_container_width=True)
-                        st.download_button("📥 CSV off-targets",
-                                           df_h.to_csv(index=False).encode(),
-                                           "offtargets.csv", "text/csv")
 
-    # 12. DASHBOARD
     with crispr_tabs[11]:
         st.markdown("### 📊 Dashboard comparatif")
         if st.session_state.get("crispr_guides") is None:
@@ -1856,7 +2020,6 @@ def render_crispr_tab():
                 fig = plot_radar_guides(crit)
                 st.plotly_chart(fig, use_container_width=True)
 
-    # 13. CARTOGRAPHIE
     with crispr_tabs[12]:
         st.markdown("### 🗺️ Cartographie génomique")
         if st.session_state.get("ot_hits") is None:
@@ -1865,41 +2028,23 @@ def render_crispr_tab():
             fig = plot_genome_ideogram(st.session_state.ot_hits,
                                         st.session_state.get("ot_genome", {}))
             st.plotly_chart(fig, use_container_width=True)
-            df_h = pd.DataFrame(st.session_state.ot_hits)
-            if not df_h.empty:
-                st.download_button("📥 CSV hits", df_h.to_csv(index=False).encode(),
-                                   "offtargets_viz.csv", "text/csv")
 
-    # 14. BENCHMARK RÉEL
     with crispr_tabs[13]:
-        st.markdown("### 🎓 Benchmark sur données RÉELLES")
+        st.markdown("### 🎓 Benchmark Doench 2016")
         st.markdown("""<div class="ref-box">
-        📚 Comparaison avec baselines publiées : GC optimal, Doench-like, Random.
+        📚 Comparaison avec baselines : GC optimal, Doench-like, Random.
         </div>""", unsafe_allow_html=True)
         bench_subs = st.tabs(["📚 Dataset", "🚀 Benchmark", "📊 Résultats"])
-
         with bench_subs[0]:
             if st.session_state.get("doench_real") is None:
                 if st.button("🌐 Télécharger Doench 2016", type="primary", key="bench_dl"):
                     with st.spinner("Téléchargement..."):
                         st.session_state.doench_real = download_doench_2016()
                     st.success(f"✅ {len(st.session_state.doench_real)} guides")
-            if st.session_state.get("doench_real") is not None:
+            else:
                 df = st.session_state.doench_real
-                st.success(f"✅ Dataset chargé : {len(df)} guides")
+                st.success(f"✅ Dataset : {len(df)} guides")
                 st.dataframe(df.head(10), use_container_width=True)
-                # Aussi permettre upload
-                fu = st.file_uploader("Ou upload CSV (guide, efficiency)", type=["csv"], key="bench_fu")
-                if fu:
-                    try:
-                        df_u = pd.read_csv(fu)
-                        df_u["guide"] = df_u["guide"].astype(str).str.upper().str.strip()
-                        df_u["efficiency"] = pd.to_numeric(df_u["efficiency"], errors='coerce')
-                        df_u = df_u.dropna(subset=["guide","efficiency"])
-                        st.session_state.doench_real = df_u
-                        st.success(f"✅ {len(df_u)} guides uploadés")
-                    except Exception as e: st.error(f"Erreur : {e}")
-
         with bench_subs[1]:
             if st.session_state.get("doench_real") is None:
                 st.warning("Chargez un dataset")
@@ -1912,7 +2057,6 @@ def render_crispr_tab():
                                                      st.session_state.doench_real)
                     st.session_state.bench_results = results
                     st.success("✅ Benchmark terminé")
-
         with bench_subs[2]:
             if st.session_state.get("bench_results") is None:
                 st.info("Lancez d'abord le benchmark")
@@ -1928,22 +2072,218 @@ def render_crispr_tab():
                 c5.metric("Spearman ρ", m["Spearman ρ"])
                 c6.metric("N", m["N"])
                 st.markdown("#### 🏆 Comparaison avec baselines")
-                st.dataframe(r["comparison"].style.background_gradient(cmap="RdYlGn",
-                                                                        subset=["R²","Pearson r"]),
-                             use_container_width=True)
+                st.dataframe(r["comparison"], use_container_width=True)
                 st.markdown("#### 🎯 Prédit vs Réel")
                 fig = px.scatter(r["predictions"], x="Efficacité réelle", y="Efficacité prédite",
                                  color="Erreur absolue", color_continuous_scale="RdYlGn_r",
-                                 template="plotly_dark", title="Prédit vs Réel (Doench 2016)")
+                                 template="plotly_dark", title="Doench 2016")
                 fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
                               line=dict(color="#00D4AA", width=2, dash="dash"))
                 st.plotly_chart(fig, use_container_width=True)
-                st.download_button("📥 Prédictions",
-                                   r["predictions"].to_csv(index=False).encode(),
-                                   "bench_predictions.csv", "text/csv")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# APPLICATION PRINCIPALE
+# RENDU : PLANT
+# ══════════════════════════════════════════════════════════════════════════════
+def render_plant_tab():
+    st.markdown("## 🌱 Plant & Agronomie <span class='badge-new'>SIVB/CAST</span>", unsafe_allow_html=True)
+    st.markdown("""<div class="ref-box">
+    📚 Compatible SIVB/CAST 2026 — Pairwise & Rainbow Crops.
+    8 génomes végétaux · 6 catégories de traits · Bases Gramene, MaizeGDB, RAP-DB ·
+    Essais terrain (G×E) · Modèles ML plantes.
+    </div>""", unsafe_allow_html=True)
+
+    plant_tabs = st.tabs([
+        "🌾 Génomes végétaux", "🧬 Bases agronomiques", "🌱 Traits agronomiques",
+        "🏛️ Gènes domestication", "📊 Essais terrain (G×E)", "🤖 ML Plantes",
+        "✂️ CRISPR Plantes", "📚 Références 2024-2026",
+    ])
+
+    with plant_tabs[0]:
+        st.markdown("### 🌾 Génomes végétaux")
+        st.markdown("Source : **Ensembl Plants Release 57**")
+        df_genomes = list_plant_genomes()
+        st.dataframe(df_genomes, use_container_width=True, hide_index=True)
+        st.markdown("#### 🌐 Téléchargement")
+        c1, c2 = st.columns(2)
+        with c1:
+            genome_name = st.selectbox("Génome", list(PLANT_GENOMES.keys()), key="plant_genome")
+        with c2:
+            chroms_avail = PLANT_GENOMES[genome_name]["chroms"]
+            chrom = st.selectbox("Chromosome", chroms_avail, key="plant_chrom")
+        if st.button("🌐 Télécharger le chromosome", type="primary", key="plant_dl_btn"):
+            progress = st.progress(0, text="Téléchargement...")
+            def cb(frac, msg): progress.progress(min(1.0, frac), text=msg)
+            seq, err = download_plant_chromosome(genome_name, chrom, cb)
+            progress.empty()
+            if err:
+                st.error(err)
+                st.info("💡 Alternative : Phytozome, Gramene ou Ensembl Plants manuellement.")
+            else:
+                st.session_state.plant_genome = {f"{genome_name}_{chrom}": encode_sequence_2bit(seq)}
+                st.session_state.plant_index = None
+                st.success(f"✅ {chrom} : {len(seq):,} bp téléchargés")
+                st.info("💡 Utilisez CRISPR → Off-target pour analyser ce génome.")
+
+    with plant_tabs[1]:
+        st.markdown("### 🧬 Bases de données agronomiques")
+        c1, c2 = st.columns(2)
+        with c1:
+            db_choice = st.selectbox("Base", list(AGRONOMIC_DATABASES.keys()), key="plant_db")
+        with c2:
+            gene_query = st.text_input("Nom du gène", value="DREB1A", key="plant_gene_query")
+        info = AGRONOMIC_DATABASES[db_choice]
+        st.info(f"**{db_choice}** — {info['description']}")
+        st.markdown(f"🔗 [Site officiel]({info['url']})")
+        if st.button("🔍 Interroger l'API", type="primary", key="plant_query_btn"):
+            with st.spinner(f"Interrogation..."):
+                result = query_agronomic_gene(gene_query, db_choice)
+            if result.get("status") == "ok":
+                st.success("✅ Résultat")
+                st.json(result.get("data", {}))
+            else:
+                st.warning("API non disponible")
+                if "data" in result and "url" in result["data"]:
+                    st.markdown(f"[🔍 Rechercher manuellement]({result['data']['url']})")
+        st.markdown("---")
+        st.markdown("#### 📚 Toutes les bases")
+        rows = [{"Base": n, "Description": i["description"], "Espèces": ", ".join(i["species"])}
+                for n, i in AGRONOMIC_DATABASES.items()]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    with plant_tabs[2]:
+        st.markdown("### 🌱 Traits agronomiques majeurs")
+        for cat_name, cat in AGRONOMIC_TRAITS.items():
+            with st.expander(f"{cat_name} — {cat['description']}"):
+                rows = [{"Gène": g, "Espèce": i["species"], "Fonction": i["function"],
+                         "Référence": i["ref"]} for g, i in cat["genes"].items()]
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    with plant_tabs[3]:
+        st.markdown("### 🏛️ Gènes de domestication")
+        crop = st.selectbox("Culture", list(DOMESTICATION_GENES.keys()), key="dom_crop")
+        genes_data = DOMESTICATION_GENES[crop]
+        rows = [{"Gène": g, "Rôle": r} for g, r in genes_data.items()]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.info("💡 Excellentes cibles pour l'édition génique (néo-domestication).")
+
+    with plant_tabs[4]:
+        st.markdown("### 📊 Analyse d'essais terrain (G×E)")
+        if st.button("🎲 Générer essai démo", key="field_demo"):
+            np.random.seed(42)
+            n_geno, n_env = 20, 5
+            genotypes = [f"G{i+1:02d}" for i in range(n_geno)]
+            environments = ["Nord","Sud","Est","Ouest","Centre"]
+            rows = []
+            for g in genotypes:
+                g_eff = np.random.normal(0, 2)
+                for e in environments:
+                    e_eff = np.random.normal(0, 3)
+                    for rep in range(3):
+                        rows.append({"genotype": g, "environment": e,
+                                     "replication": rep + 1,
+                                     "trait_value": round(50 + g_eff + e_eff + np.random.normal(0, 1), 2)})
+            st.session_state.field_trial = pd.DataFrame(rows)
+            st.success(f"✅ {n_geno} génotypes × {n_env} environnements")
+        uploaded_trial = st.file_uploader("Ou upload CSV (genotype, environment, trait_value)",
+                                            type=["csv"], key="field_upload")
+        if uploaded_trial:
+            try:
+                st.session_state.field_trial = pd.read_csv(uploaded_trial)
+                st.success(f"✅ {len(st.session_state.field_trial)} obs")
+            except Exception as e: st.error(f"Erreur : {e}")
+        if st.session_state.get("field_trial") is not None:
+            df = st.session_state.field_trial
+            st.dataframe(df.head(10), use_container_width=True)
+            if st.button("🚀 Analyser", type="primary", key="field_analyze"):
+                with st.spinner("Analyse..."):
+                    results = analyze_field_trial(df)
+                st.session_state.field_results = results
+            if st.session_state.get("field_results"):
+                r = st.session_state.field_results
+                if "error" in r:
+                    st.error(r["error"])
+                else:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Obs", r["n_obs"])
+                    c2.metric("Génotypes", r["n_genotypes"])
+                    c3.metric("Environnements", r["n_environments"])
+                    c4.metric("Moyenne", r["mean_trait"])
+                    c1, c2 = st.columns(2)
+                    c1.metric("F génotype", r.get("F_genotype", "N/A"))
+                    c2.metric("F env", r.get("F_environment", "N/A"))
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Var tot", r.get("var_total", "N/A"))
+                    c2.metric("Var géno", r.get("var_genotype", "N/A"))
+                    c3.metric("Var env", r.get("var_environment", "N/A"))
+                    c4.metric("Var G×E", r.get("var_GxE", "N/A"))
+                    if "H2_broad" in r:
+                        st.metric("H²", r["H2_broad"])
+                    st.markdown("#### 🏆 Classement stabilité")
+                    st.dataframe(r["stability"], use_container_width=True, hide_index=True)
+
+    with plant_tabs[5]:
+        st.markdown("### 🤖 Modèles ML spécifiques plantes")
+        rows = [{"Outil": n, "Description": i["description"],
+                 "Espèces": ", ".join(i["species"]), "Référence": i["reference"],
+                 "URL": i["url"]} for n, i in PLANT_ML_TOOLS.items()]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.markdown("---")
+        crop = st.selectbox("Culture", ["Riz","Maïs","Blé","Arabidopsis","Soja","Tomate"], key="ml_crop")
+        recommended = [n for n, i in PLANT_ML_TOOLS.items() if crop in i["species"] or "Multi" in i["species"]]
+        if recommended: st.success(f"✅ Outils pour {crop} : {', '.join(recommended)}")
+        else: st.info("Aucun outil spécialisé")
+
+    with plant_tabs[6]:
+        st.markdown("### ✂️ Recommandations CRISPR pour plantes")
+        c1, c2 = st.columns(2)
+        with c1: plant_gene = st.text_input("Gène", value="Gn1a", key="plant_crispr_gene")
+        with c2: crop = st.selectbox("Culture", ["Riz","Maïs","Blé","Arabidopsis","Soja","Tomate"], key="plant_crispr_crop")
+        if st.button("🚀 Générer recommandations", type="primary", key="plant_crispr_btn"):
+            reco = plant_crispr_recommendations(plant_gene, crop)
+            st.markdown(f"#### 🌾 Recommandations pour **{plant_gene}** ({crop})")
+            if reco.get("trait_info"):
+                st.success(f"✅ Gène identifié : **{reco['trait_info']['catégorie']}**")
+                c1, c2 = st.columns(2)
+                c1.metric("Fonction", reco["trait_info"]["fonction"])
+                c2.metric("Réf", reco["trait_info"]["référence"])
+            st.markdown("#### 🎯 Variant Cas recommandé")
+            st.info(f"**{reco['variant_Cas_recommandé']}** — {reco['raison_variant']}")
+            st.markdown("#### ⚠️ Considérations")
+            for c in reco["considérations"]: st.markdown(f"- {c}")
+
+    with plant_tabs[7]:
+        st.markdown("### 📚 Références 2024-2026")
+        st.markdown("""
+        #### Modèles on-target
+        - **CRISPR_HNN** (2025) — Comput Struct Biotechnol J 27:2098-2106
+        - **CrisprFusion** (2026) — Comput Biol Chem
+        - **DeepCC9** (2026) — Bioinformatics
+
+        #### Off-target
+        - **CCLMoff** (2025) — Commun Biol 8:882
+        - **DNABERT-Epi** (2025) — PLoS ONE 20(11):e0335863
+        - **CRISMER** (2025) — bioRxiv
+
+        #### Base editing
+        - **CRISPRon-ABE/CBE** (2025) — Nat Commun 16:9821
+        - **BEstimate** (2026) — Genome Biol
+
+        #### Prime editing
+        - **PRIDICT2.0** (2025) — Nat Biotechnol 43:712-719
+        - **OptiPrime** (2025) — Thèse Harvard
+        - **PrimeNet** (2025) — NAR
+
+        #### Livraison in vivo
+        - **LNP vs AAV9** (Zhang 2025) — Cell Rep
+        - **Prime editing in vivo** (2026) — AJHG
+
+        #### Fondateurs
+        - **Doench 2016** — Nat Biotechnol 34:184-191
+        - **Hsu 2013** — Nat Biotechnol 31:827-832
+        """)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
     defaults = {
@@ -1953,29 +2293,25 @@ def main():
         "epi_annotation_db": generate_epi_annotation_db(),
         "gemini_key": _ENV_GEMINI_KEY, "groq_key": _ENV_GROQ_KEY,
         "openrouter_key": _ENV_OPENROUTER_KEY, "deepseek_key": _ENV_DEEPSEEK_KEY,
-        "claude_key": _ENV_CLAUDE_KEY,
         "ai_provider": "Gemini Flash (Google — GRATUIT)",
         "gemini_model": "gemini-1.5-flash",
         "groq_model": "llama-3.3-70b-versatile",
-        "openrouter_model": "meta-llama/llama-3.1-8b-instruct:free",
-        "ollama_model": "llama3",
         "trained_model": load_model(),
-        # CRISPR
         "crispr_genes": None, "crispr_guides": None, "crispr_sequence": None,
         "crispr_multiplex": None, "crispr_protocol": None, "crispr_export": None,
         "crispr_cas": "SpCas9 (NGG)",
-        "hdr_donor": None, "hdr_plasmid": None,
-        "ml_bundle": None, "doench_real": None,
+        "hdr_donor": None, "ml_bundle": None, "doench_real": None,
         "ot_genome": None, "ot_index": None, "ot_summary": None, "ot_hits": None,
         "bench_results": None, "biomarker_results": None,
+        "plant_genome": None, "plant_index": None,
+        "field_trial": None, "field_results": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state: st.session_state[k] = v
 
-    # Sidebar
     with st.sidebar:
         st.markdown("## 🔬 MetaInsight *v9*")
-        st.markdown('<span style="font-size:0.7rem;color:#7A8BA8;">Multi-omics · PGM · Épi · CRISPR</span>', unsafe_allow_html=True)
+        st.markdown('<span style="font-size:0.7rem;color:#7A8BA8;">Multi-omics · PGM · Épi · CRISPR · Plant</span>', unsafe_allow_html=True)
         st.markdown("---")
         data_type = st.radio("Type de données",
             ["Microbiome", "PGM (VCF)", "Épitranscriptomique"], index=0, key="dt_radio")
@@ -2003,21 +2339,21 @@ def main():
                     tmp.write(f.read()); vcf_path = tmp.name
                 df_v = load_vcf_with_duckdb(vcf_path)
                 if not df_v.empty:
-                    st.session_state.pgm_data = df_v; st.success(f"✅ {len(df_v)} variants")
+                    st.session_state.pgm_data = df_v
+                    st.success(f"✅ {len(df_v)} variants")
             if st.button("⚡ Démo PGM", key="demo_pgm"):
                 st.session_state.pgm_data = generate_demo_pgm_data()
-            pgm = st.session_state.pgm_data
-            st.markdown(f"*{len(pgm)}* variants")
+            st.markdown(f"*{len(st.session_state.pgm_data)}* variants")
         else:
-            st.markdown("### 🧬 Épitranscriptomique")
+            st.markdown("### 🧬 Épi")
             f = st.file_uploader("CSV/TSV", type=["csv","tsv","txt"], key="ul_epi")
             if f is not None:
                 df_e = parse_epitranscriptomic_file(f)
-                if df_e is not None: st.session_state.epi_data = df_e; st.success(f"✅ {len(df_e)}")
+                if df_e is not None:
+                    st.session_state.epi_data = df_e; st.success(f"✅ {len(df_e)}")
             if st.button("⚡ Démo Épi", key="demo_epi"):
                 st.session_state.epi_data = generate_demo_epitranscriptomic_data()
-            epi = st.session_state.epi_data
-            st.markdown(f"*{len(epi)}* positions")
+            st.markdown(f"*{len(st.session_state.epi_data)}* positions")
 
         st.markdown("---")
         st.markdown("### 🤖 IA")
@@ -2037,9 +2373,6 @@ def main():
         elif provider.startswith("OpenRouter"):
             st.session_state.openrouter_key = st.text_input("Clé OpenRouter", type="password",
                 value=st.session_state.get("openrouter_key", ""), key="ork_in")
-        elif provider.startswith("Ollama"):
-            st.session_state.ollama_model = st.text_input("Modèle Ollama",
-                value="llama3", key="oll_in")
 
     # Onglets
     tab_names = [
@@ -2050,13 +2383,14 @@ def main():
         "🧩 VAE", "💡 XAI/SHAP", "🕸 GNN", "📄 Rapport IA", "🧬 Multi-Omics Avancé",
         "📝 Article", "🧬 PGM Clinique", "🧬 Épitranscriptomique Avancé",
         "✂️ CRISPR Design & Delivery",
+        "🌱 Plant & Agronomie",
     ]
     tabs = st.tabs(tab_names)
 
     # Onglet 0 : Accueil
     with tabs[0]:
         st.markdown("## 🏠 Accueil — MetaInsight v9")
-        st.markdown('<div class="badge-new">Données RÉELLES</div> <div class="badge-fix">CRISPR</div>', unsafe_allow_html=True)
+        st.markdown('<div class="badge-new">Données RÉELLES</div> <div class="badge-fix">CRISPR</div> <div class="badge-new">Plant</div>', unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns(4)
         df_m = st.session_state.df_microbiome
         c1.metric("Échantillons", len(df_m) if df_m is not None else 0)
@@ -2064,20 +2398,19 @@ def main():
         c3.metric("Modifications Épi", len(st.session_state.epi_data))
         c4.metric("Groupes", df_m["environment"].nunique() if df_m is not None and "environment" in df_m else 0)
         st.markdown("""
-        **MetaInsight v9** avec **CRISPR Design & Delivery** (données réelles) :
-        - 🌐 Téléchargement Doench 2016 (2333 guides publiés)
-        - 🌐 Génomes UCSC réels (hg38, mm10...)
-        - 📊 Scoring CFD + MIT publiés
-        - 🧬 Modèle HDR multi-facteurs
-        - 🤖 ML entraîné sur données expérimentales
+        **MetaInsight v9** — 25 onglets :
+        - 🦠 Microbiome (diversité, abondance, KEGG...)
+        - 🧬 PGM clinique (BRCA, CPIC, CADD)
+        - 🧬 Épitranscriptomique (m6A, m5C, Ψ)
+        - ✂️ CRISPR Design & Delivery (14 sous-onglets)
+        - 🌱 **Plant & Agronomie (NOUVEAU)** — compatible SIVB/CAST 2026
         """)
 
     # Onglet 1 : Diversité
     with tabs[1]:
         st.markdown("## 📊 Diversité α/β")
         df = st.session_state.df_microbiome
-        if df is None or df.empty: st.warning("Aucune donnée")
-        else:
+        if df is not None and not df.empty:
             env_col = "environment" if "environment" in df.columns else next(
                 (c for c in ['group','class','condition','label'] if c in df.columns), None)
             if env_col:
@@ -2096,8 +2429,7 @@ def main():
     with tabs[2]:
         st.markdown("## 🧮 Abondance Différentielle")
         df = st.session_state.df_microbiome
-        if df is None or df.empty: st.warning("Aucune donnée")
-        else:
+        if df is not None and not df.empty:
             tc = detect_feature_cols(df)
             gc = next((c for c in ['environment','group','class','condition','label'] if c in df.columns), None)
             if tc and gc:
@@ -2251,12 +2583,11 @@ def main():
 
     # Onglet 11 : Federated
     with tabs[11]:
-        st.markdown("## 🔒 Federated Learning")
+        st.markdown("## 🔒 Federated")
         r = st.slider("Rounds", 2, 20, 10, key="fed_r")
         if st.button("🚀 Simuler", key="fed_btn"):
             acc = 75 + 18 * (1 - np.exp(-np.arange(1, r+1)/5))
-            fig = px.line(x=np.arange(1, r+1), y=acc, template="plotly_dark",
-                          labels={"x":"Round","y":"Précision"})
+            fig = px.line(x=np.arange(1, r+1), y=acc, template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
 
     # Onglet 12 : Clustering
@@ -2304,13 +2635,12 @@ def main():
                 taxon = st.selectbox("Taxon", tc, key="dyn_t")
                 if st.button("🚀 Modéliser", key="dyn_btn"):
                     vals = df[taxon].values
-                    fig = px.line(x=np.arange(len(vals)), y=vals, template="plotly_dark",
-                                  title=f"Évolution {taxon}")
+                    fig = px.line(x=np.arange(len(vals)), y=vals, template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
     # Onglet 15 : VAE
     with tabs[15]:
-        st.markdown("## 🧩 VAE (PCA latent)")
+        st.markdown("## 🧩 VAE")
         df = st.session_state.df_microbiome
         if df is not None and not df.empty:
             tc = detect_feature_cols(df)
@@ -2327,7 +2657,7 @@ def main():
 
     # Onglet 16 : XAI
     with tabs[16]:
-        st.markdown("## 💡 XAI / SHAP")
+        st.markdown("## 💡 XAI")
         df = st.session_state.df_microbiome
         if df is not None and not df.empty:
             tc = detect_feature_cols(df)
@@ -2395,7 +2725,7 @@ def main():
 
     # Onglet 20 : Article
     with tabs[20]:
-        st.markdown("## 📝 Article Scientifique")
+        st.markdown("## 📝 Article")
         with st.form("article_f"):
             title = st.text_input("Titre", "Analyse intégrative", key="art_t")
             sections = st.multiselect("Sections",
@@ -2423,9 +2753,7 @@ def main():
                     m = (pgm["chrom"] == r["chrom"]) & (pgm["pos"] >= r["start"]) & (pgm["pos"] <= r["end"])
                     sub = pgm.loc[m].copy()
                     if not sub.empty: sub["gene"] = g; parts.append(sub)
-                if parts:
-                    st.dataframe(pd.concat(parts, ignore_index=True), use_container_width=True)
-                else: st.info("Aucun variant BRCA")
+                if parts: st.dataframe(pd.concat(parts, ignore_index=True), use_container_width=True)
             with pt[1]:
                 pharma = pd.DataFrame([
                     {"gene":"CYP2D6","rsid":"rs3892097","phenotype":"Métaboliseur lent","drug":"Codéine"},
@@ -2435,7 +2763,6 @@ def main():
                 if "rsid" in pgm.columns:
                     m = pgm.merge(pharma, on="rsid", how="inner")
                     if not m.empty: st.dataframe(m, use_container_width=True)
-                    else: st.info("Aucun variant pharmacogénétique")
             with pt[2]:
                 g = st.selectbox("Gène", ["BRCA1","BRCA2","TP53"], key="lol_g")
                 lengths = {"BRCA1": 1860, "BRCA2": 3418, "TP53": 393}
@@ -2455,15 +2782,13 @@ def main():
                         ax.plot([mut["pos"], mut["pos"]], [0, h], 'o-', color='red', ms=5)
                         ax.text(mut["pos"], h + 0.1, mut["aa"], rotation=45, fontsize=8)
                     ax.set_xlim(0, lengths[g])
-                    ax.set_title(f"Lollipop {g}")
                     st.pyplot(fig); plt.close()
 
     # Onglet 22 : Épitranscriptomique Avancé
     with tabs[22]:
         st.markdown("## 🧬 Épitranscriptomique Avancé")
         epi = st.session_state.epi_data
-        if epi is None or epi.empty: st.warning("Aucune donnée")
-        else:
+        if epi is not None and not epi.empty:
             es = st.tabs(["📊 Profil","🔥 Heatmap","📈 Corrélation","📊 Stats"])
             with es[0]:
                 trs = epi['transcript_id'].unique()
@@ -2492,8 +2817,12 @@ def main():
     with tabs[23]:
         render_crispr_tab()
 
+    # Onglet 24 : Plant & Agronomie
+    with tabs[24]:
+        render_plant_tab()
+
     st.markdown("---")
-    st.caption("🧬 MetaInsight v9 + CRISPR (données réelles) · Doench 2016 · UCSC genomes · CFD/MIT scores publiés")
+    st.caption("🧬 MetaInsight v9 + CRISPR + Plant (données réelles) · Doench 2016 · UCSC · CFD/MIT · Ensembl Plants · SIVB/CAST 2026")
 
 if __name__ == "__main__":
     main()
