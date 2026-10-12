@@ -1,7 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# MetaInsight v9 — Plateforme intégrative multi-omique, PGM, Épitranscriptomique
-# + Module CRISPR Design & Delivery (données réelles)
-# + Module Plant & Agronomie (compatible SIVB/CAST 2026)
+# MetaInsight v9 — Multi-omique + PGM + Épitranscriptomique + CRISPR + Plant
+# Version corrigée — Session state sécurisé — 25 onglets
 # ══════════════════════════════════════════════════════════════════════════════
 
 import streamlit as st
@@ -76,15 +75,11 @@ try:
 except ImportError:
     XGBOOST_AVAILABLE = False
 
-# ── Clés API
 _ENV_GEMINI_KEY     = os.environ.get('GEMINI_API_KEY', '')
 _ENV_GROQ_KEY       = os.environ.get('GROQ_API_KEY', '')
 _ENV_OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '')
 _ENV_DEEPSEEK_KEY   = os.environ.get('DEEPSEEK_API_KEY', '')
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION STREAMLIT
-# ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
     page_title="MetaInsight v9 — Multi-omics + CRISPR + Plant",
     layout="wide",
@@ -128,12 +123,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Cache
 CACHE_DIR = Path("./crispr_cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DONNÉES DÉMO (fallback)
+# DÉMO
 # ══════════════════════════════════════════════════════════════════════════════
 @st.cache_data
 def generate_demo_microbiome():
@@ -486,36 +480,6 @@ def parse_epitranscriptomic_file(f):
     except Exception as e:
         st.error(f"Erreur parsing : {e}"); return None
 
-def parse_fastq_metadata(f):
-    if not BIOPYTHON_AVAILABLE: return None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.fastq') as tmp:
-            tmp.write(f.read()); tmp_path = tmp.name
-        records = list(SeqIO.parse(tmp_path, "fastq"))
-        avg_qual = np.mean([np.mean(r.letter_annotations["phred_quality"]) for r in records]) if records else 0
-        os.unlink(tmp_path)
-        return {"n_reads": len(records), "avg_quality": avg_qual}
-    except Exception: return None
-
-def parse_bam_advanced(f):
-    if not PYSAM_AVAILABLE: return None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.bam') as tmp:
-            tmp.write(f.read()); tmp_path = tmp.name
-        bam = pysam.AlignmentFile(tmp_path, "rb")
-        n_reads = n_mapped = n_with_mods = 0
-        for read in bam:
-            n_reads += 1
-            if not read.is_unmapped:
-                n_mapped += 1
-                if read.has_tag('MM') and read.has_tag('ML'):
-                    n_with_mods += 1
-            if n_reads > 1000: break
-        bam.close(); os.unlink(tmp_path)
-        return {"n_reads": n_reads, "n_mapped": n_mapped, "n_reads_with_mods": n_with_mods,
-                "mod_rate": n_with_mods / max(n_reads, 1)}
-    except Exception: return None
-
 def plot_modification_profile_advanced(df, transcript_id=None, smooth=True):
     if transcript_id: df = df[df['transcript_id'] == transcript_id]
     if df.empty: return None
@@ -541,19 +505,9 @@ def get_default_model():
                                         max_iter=1000, tol=1e-3, random_state=42,
                                         warm_start=True))
 
-def extract_features(sequence, position):
-    start = max(0, position - 5); end = min(len(sequence), position + 5)
-    context = sequence[start:end]
-    features = [context.count(b) / max(1, len(context)) for b in ['A','C','G','T','U']]
-    for motif in ['DRACH','UGU','CG','RRACH','CNG','GGACU']:
-        features.append(1 if motif in context.upper() else 0)
-    features.append(position / max(1, len(sequence)))
-    return np.array(features)
-
 MODEL_PATH = "metainsight_model.pkl"
 def load_model():
     return joblib.load(MODEL_PATH) if os.path.exists(MODEL_PATH) else get_default_model()
-def save_model(model): joblib.dump(model, MODEL_PATH)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CRISPR — CONSTANTES
@@ -694,7 +648,7 @@ PLANT_GENOMES = {
         "url_base": "https://ftp.ensemblgenomes.ebi.ac.uk/pub/plants/release-57/fasta/triticum_aestivum/dna/",
         "pattern": "Triticum_aestivum.IWGSC.dna.chromosome.{chrom}.fa.gz",
         "chroms": [f"{g}{n}" for g in "ABD" for n in range(1, 8)][:21],
-        "size_mb": 14500, "ploidy": "2n=42 (hexaploïde)", "importance": "Céréale majeure",
+        "size_mb": 14500, "ploidy": "2n=42", "importance": "Céréale majeure",
     },
     "Tomato (SL3.0)": {
         "organism": "solanum_lycopersicum", "assembly": "SL3.0",
@@ -739,18 +693,16 @@ AGRONOMIC_TRAITS = {
             "Pi54": {"species": "Riz", "function": "Résistance blast", "ref": "Sharma 2005"},
             "Lr34": {"species": "Blé", "function": "Résistance rouille", "ref": "Krattinger 2009 Science"},
             "Mlo": {"species": "Orge/Blé", "function": "Résistance oïdium", "ref": "Büschges 1997 Cell"},
-            "Rpg1": {"species": "Orge", "function": "Résistance stem rust", "ref": "Brueggeman 2002 PNAS"},
         },
     },
     "💧 Tolérance sécheresse": {
         "description": "Réponse au stress hydrique",
         "genes": {
-            "DREB1A": {"species": "Arabidopsis/Multiple", "function": "Facteur transcription drought", "ref": "Liu 1998 Plant Cell"},
+            "DREB1A": {"species": "Arabidopsis", "function": "Facteur transcription drought", "ref": "Liu 1998 Plant Cell"},
             "DREB2A": {"species": "Multiple", "function": "Déshydratation", "ref": "Sakuma 2006 Plant Cell"},
             "NAC": {"species": "Multiple", "function": "Stress abiotique (SNAC1)", "ref": "Hu 2006 PNAS"},
             "LEA": {"species": "Multiple", "function": "Protéines embryogenèse tardive", "ref": "Hundertmark 2008"},
             "OsNAC10": {"species": "Riz", "function": "Sécheresse + rendement", "ref": "Jeong 2010 Plant Physiol"},
-            "HVA1": {"species": "Orge/Riz", "function": "Protéine LEA type 3", "ref": "Xu 1996 Plant Physiol"},
         },
     },
     "🧪 Qualité nutritionnelle": {
@@ -761,7 +713,6 @@ AGRONOMIC_TRAITS = {
             "ZIP": {"species": "Multiple", "function": "Zinc transporteur", "ref": "Multiple"},
             "NAS": {"species": "Multiple", "function": "Fer (nicotianamine)", "ref": "Curie 2009 Plant J"},
             "PSY1": {"species": "Maïs", "function": "Provitamine A", "ref": "Paine 2005 Nat Biotechnol"},
-            "CRTISO": {"species": "Riz", "function": "Caroténoïdes (Golden Rice)", "ref": "Ye 2000 Science"},
         },
     },
     "🌿 Architecture plante": {
@@ -848,7 +799,7 @@ def download_doench_2016(force=False):
             for c in df.columns:
                 cl = c.lower()
                 if any(k in cl for k in ['sgrna','guide_seq','seq','guide']): col_map[c] = 'guide'
-                elif any(k in el for el in ['eff','score','value']): col_map[c] = 'efficiency'
+                elif any(k in cl for k in ['eff','score','value']): col_map[c] = 'efficiency'
             df = df.rename(columns=col_map)
             if 'guide' in df.columns and 'efficiency' in df.columns:
                 df['guide'] = df['guide'].astype(str).str.upper().str.strip()
@@ -895,8 +846,11 @@ def download_chromosome(genome="hg38", chrom="chr21", progress_callback=None):
         return None, f"Erreur : {e}"
 
 def download_plant_chromosome(genome_name, chrom, progress_callback=None):
-    if genome_name not in PLANT_GENOMES: return None, "Génome non supporté"
-    info = PLANT_GENOMES[genome_name]
+    info = PLANT_GENOMES.get(genome_name)
+    if info is None:
+        return None, f"Génome '{genome_name}' non supporté"
+    if not chrom:
+        return None, "Chromosome non spécifié"
     cache_file = CACHE_DIR / f"plant_{info['organism']}_{chrom}.fa.gz"
     if cache_file.exists():
         try:
@@ -1155,7 +1109,6 @@ Reverse : 5'-AAAC{reverse_complement(guide)}C-3'
 - PCR + T7 endonuclease I + Sanger/TIDE
 """
 
-# HDR
 def check_silent_mutation(seq_ref, seq_alt, mut_pos, frame=0):
     cs = ((mut_pos - frame) // 3) * 3 + frame
     if cs + 3 > len(seq_ref): return False, "—", "—"
@@ -1262,7 +1215,6 @@ def predict_hdr_efficiency_real(arm_length, edit_type, cell_cycle="asynchrone",
             "reference": "Richardson 2016, Yeh 2019, Kwart 2017",
             "recommandations": recos}
 
-# ML
 def extract_real_features(guide):
     g = guide.upper()
     feats = {}
@@ -1337,7 +1289,6 @@ def predict_efficacy_ml(guides_list, model, feature_names):
                                 else "🟠 Moyen" if pred > 0.35 else "🔴 Faible")})
     return pd.DataFrame(rows).sort_values("Efficacité prédite", ascending=False)
 
-# Off-target
 def build_kmer_index(genome, k=12, progress_callback=None):
     index = defaultdict(list)
     total = sum(len(seq) for seq in genome.values())
@@ -1426,7 +1377,6 @@ def analyze_guide_offtargets(guide, genome, pam="NGG", max_mismatch=4, top_n=100
                "specificity_score": round(1.0 - min(1.0, n_high*0.5 + n_mod*0.1), 3)}
     return summary, sorted(hits, key=lambda h: (h["mismatches"], -h["cfd_score"]))[:top_n]
 
-# Dashboard
 def compute_guide_criteria(g, sequence=None, ot_hits=None):
     crit = {}
     crit["Doench"] = score_guide_doench_like(g)
@@ -1687,7 +1637,7 @@ def plant_crispr_recommendations(gene_name, crop="Riz"):
             "references": ["Wolter 2018", "Zhang 2017", "Li 2020"]}
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RENDU : CRISPR
+# RENDU CRISPR
 # ══════════════════════════════════════════════════════════════════════════════
 def render_crispr_tab():
     st.markdown("## ✂️ CRISPR Design & Delivery <span class='badge-new'>RÉEL</span>", unsafe_allow_html=True)
@@ -1967,7 +1917,7 @@ def render_crispr_tab():
                 c1.metric("Chromosome(s)", len(g))
                 c2.metric("Taille", f"{tot:,} bp")
                 if st.button("🔧 Construire l'index k-mer", key="ot_idx_btn"):
-                    with st.spinner("Construction (1-3 min)..."):
+                    with st.spinner("Construction..."):
                         st.session_state.ot_index = build_kmer_index(g, k=12)
                     st.success(f"✅ {len(st.session_state.ot_index):,} k-mers")
         with ot_subs[1]:
@@ -2082,7 +2032,7 @@ def render_crispr_tab():
                 st.plotly_chart(fig, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RENDU : PLANT
+# RENDU PLANT — VERSION CORRIGÉE
 # ══════════════════════════════════════════════════════════════════════════════
 def render_plant_tab():
     st.markdown("## 🌱 Plant & Agronomie <span class='badge-new'>SIVB/CAST</span>", unsafe_allow_html=True)
@@ -2098,32 +2048,64 @@ def render_plant_tab():
         "✂️ CRISPR Plantes", "📚 Références 2024-2026",
     ])
 
+    # ── Onglet 0 : Génomes végétaux (CORRIGÉ) ──────────────────────────
     with plant_tabs[0]:
         st.markdown("### 🌾 Génomes végétaux")
         st.markdown("Source : **Ensembl Plants Release 57**")
         df_genomes = list_plant_genomes()
         st.dataframe(df_genomes, use_container_width=True, hide_index=True)
         st.markdown("#### 🌐 Téléchargement")
+
+        # ── SÉCURISATION : réinitialiser si valeur obsolète ──
+        valid_genomes = list(PLANT_GENOMES.keys())
+        if st.session_state.get("plant_genome_select") not in valid_genomes:
+            st.session_state["plant_genome_select"] = valid_genomes[0]
+
         c1, c2 = st.columns(2)
         with c1:
-            genome_name = st.selectbox("Génome", list(PLANT_GENOMES.keys()), key="plant_genome")
-        with c2:
-            chroms_avail = PLANT_GENOMES[genome_name]["chroms"]
-            chrom = st.selectbox("Chromosome", chroms_avail, key="plant_chrom")
-        if st.button("🌐 Télécharger le chromosome", type="primary", key="plant_dl_btn"):
-            progress = st.progress(0, text="Téléchargement...")
-            def cb(frac, msg): progress.progress(min(1.0, frac), text=msg)
-            seq, err = download_plant_chromosome(genome_name, chrom, cb)
-            progress.empty()
-            if err:
-                st.error(err)
-                st.info("💡 Alternative : Phytozome, Gramene ou Ensembl Plants manuellement.")
-            else:
-                st.session_state.plant_genome = {f"{genome_name}_{chrom}": encode_sequence_2bit(seq)}
-                st.session_state.plant_index = None
-                st.success(f"✅ {chrom} : {len(seq):,} bp téléchargés")
-                st.info("💡 Utilisez CRISPR → Off-target pour analyser ce génome.")
+            genome_name = st.selectbox(
+                "Génome",
+                valid_genomes,
+                key="plant_genome_select"
+            )
 
+        # ── Accès défensif ──
+        genome_info = PLANT_GENOMES.get(genome_name, {})
+        chroms_avail = genome_info.get("chroms", [])
+
+        if not chroms_avail:
+            st.error(f"⚠️ Aucun chromosome pour '{genome_name}'.")
+            chrom = None
+        else:
+            if st.session_state.get("plant_chrom_select") not in chroms_avail:
+                st.session_state["plant_chrom_select"] = chroms_avail[0]
+            with c2:
+                chrom = st.selectbox(
+                    "Chromosome",
+                    chroms_avail,
+                    key="plant_chrom_select"
+                )
+
+        if chrom is not None:
+            if st.button("🌐 Télécharger le chromosome", type="primary", key="plant_dl_btn"):
+                progress = st.progress(0, text="Téléchargement...")
+                def cb(frac, msg): progress.progress(min(1.0, frac), text=msg)
+                with st.spinner(f"Téléchargement {genome_name} / {chrom}..."):
+                    seq, err = download_plant_chromosome(genome_name, chrom, cb)
+                progress.empty()
+                if err:
+                    st.error(err)
+                    st.info("💡 Alternative : Phytozome, Gramene ou Ensembl Plants manuellement.")
+                    st.markdown(f"[📥 Télécharger manuellement]({genome_info.get('url_base', '')})")
+                else:
+                    st.session_state.plant_genome = {
+                        f"{genome_name}_{chrom}": encode_sequence_2bit(seq)
+                    }
+                    st.session_state.plant_index = None
+                    st.success(f"✅ {chrom} : {len(seq):,} bp téléchargés")
+                    st.info("💡 Utilisez CRISPR → Off-target pour analyser ce génome.")
+
+    # ── Onglet 1 : Bases agronomiques ──────────────────────────────────
     with plant_tabs[1]:
         st.markdown("### 🧬 Bases de données agronomiques")
         c1, c2 = st.columns(2)
@@ -2131,11 +2113,11 @@ def render_plant_tab():
             db_choice = st.selectbox("Base", list(AGRONOMIC_DATABASES.keys()), key="plant_db")
         with c2:
             gene_query = st.text_input("Nom du gène", value="DREB1A", key="plant_gene_query")
-        info = AGRONOMIC_DATABASES[db_choice]
-        st.info(f"**{db_choice}** — {info['description']}")
-        st.markdown(f"🔗 [Site officiel]({info['url']})")
+        info = AGRONOMIC_DATABASES.get(db_choice, {})
+        st.info(f"**{db_choice}** — {info.get('description', '')}")
+        st.markdown(f"🔗 [Site officiel]({info.get('url', '#')})")
         if st.button("🔍 Interroger l'API", type="primary", key="plant_query_btn"):
-            with st.spinner(f"Interrogation..."):
+            with st.spinner("Interrogation..."):
                 result = query_agronomic_gene(gene_query, db_choice)
             if result.get("status") == "ok":
                 st.success("✅ Résultat")
@@ -2146,26 +2128,34 @@ def render_plant_tab():
                     st.markdown(f"[🔍 Rechercher manuellement]({result['data']['url']})")
         st.markdown("---")
         st.markdown("#### 📚 Toutes les bases")
-        rows = [{"Base": n, "Description": i["description"], "Espèces": ", ".join(i["species"])}
+        rows = [{"Base": n, "Description": i.get("description", ""),
+                 "Espèces": ", ".join(i.get("species", []))}
                 for n, i in AGRONOMIC_DATABASES.items()]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+    # ── Onglet 2 : Traits agronomiques ─────────────────────────────────
     with plant_tabs[2]:
         st.markdown("### 🌱 Traits agronomiques majeurs")
         for cat_name, cat in AGRONOMIC_TRAITS.items():
-            with st.expander(f"{cat_name} — {cat['description']}"):
-                rows = [{"Gène": g, "Espèce": i["species"], "Fonction": i["function"],
-                         "Référence": i["ref"]} for g, i in cat["genes"].items()]
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            with st.expander(f"{cat_name} — {cat.get('description', '')}"):
+                rows = [{"Gène": g, "Espèce": i.get("species", ""),
+                         "Fonction": i.get("function", ""),
+                         "Référence": i.get("ref", "")}
+                        for g, i in cat.get("genes", {}).items()]
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+    # ── Onglet 3 : Domestication ───────────────────────────────────────
     with plant_tabs[3]:
         st.markdown("### 🏛️ Gènes de domestication")
         crop = st.selectbox("Culture", list(DOMESTICATION_GENES.keys()), key="dom_crop")
-        genes_data = DOMESTICATION_GENES[crop]
+        genes_data = DOMESTICATION_GENES.get(crop, {})
         rows = [{"Gène": g, "Rôle": r} for g, r in genes_data.items()]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         st.info("💡 Excellentes cibles pour l'édition génique (néo-domestication).")
 
+    # ── Onglet 4 : Essais terrain ──────────────────────────────────────
     with plant_tabs[4]:
         st.markdown("### 📊 Analyse d'essais terrain (G×E)")
         if st.button("🎲 Générer essai démo", key="field_demo"):
@@ -2221,23 +2211,29 @@ def render_plant_tab():
                     st.markdown("#### 🏆 Classement stabilité")
                     st.dataframe(r["stability"], use_container_width=True, hide_index=True)
 
+    # ── Onglet 5 : ML Plantes ──────────────────────────────────────────
     with plant_tabs[5]:
         st.markdown("### 🤖 Modèles ML spécifiques plantes")
-        rows = [{"Outil": n, "Description": i["description"],
-                 "Espèces": ", ".join(i["species"]), "Référence": i["reference"],
-                 "URL": i["url"]} for n, i in PLANT_ML_TOOLS.items()]
+        rows = [{"Outil": n, "Description": i.get("description", ""),
+                 "Espèces": ", ".join(i.get("species", [])),
+                 "Référence": i.get("reference", ""),
+                 "URL": i.get("url", "")}
+                for n, i in PLANT_ML_TOOLS.items()]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         st.markdown("---")
         crop = st.selectbox("Culture", ["Riz","Maïs","Blé","Arabidopsis","Soja","Tomate"], key="ml_crop")
-        recommended = [n for n, i in PLANT_ML_TOOLS.items() if crop in i["species"] or "Multi" in i["species"]]
+        recommended = [n for n, i in PLANT_ML_TOOLS.items()
+                       if crop in i.get("species", []) or "Multi" in i.get("species", [])]
         if recommended: st.success(f"✅ Outils pour {crop} : {', '.join(recommended)}")
         else: st.info("Aucun outil spécialisé")
 
+    # ── Onglet 6 : CRISPR Plantes ──────────────────────────────────────
     with plant_tabs[6]:
         st.markdown("### ✂️ Recommandations CRISPR pour plantes")
         c1, c2 = st.columns(2)
         with c1: plant_gene = st.text_input("Gène", value="Gn1a", key="plant_crispr_gene")
-        with c2: crop = st.selectbox("Culture", ["Riz","Maïs","Blé","Arabidopsis","Soja","Tomate"], key="plant_crispr_crop")
+        with c2: crop = st.selectbox("Culture",
+            ["Riz","Maïs","Blé","Arabidopsis","Soja","Tomate"], key="plant_crispr_crop")
         if st.button("🚀 Générer recommandations", type="primary", key="plant_crispr_btn"):
             reco = plant_crispr_recommendations(plant_gene, crop)
             st.markdown(f"#### 🌾 Recommandations pour **{plant_gene}** ({crop})")
@@ -2251,6 +2247,7 @@ def render_plant_tab():
             st.markdown("#### ⚠️ Considérations")
             for c in reco["considérations"]: st.markdown(f"- {c}")
 
+    # ── Onglet 7 : Références ──────────────────────────────────────────
     with plant_tabs[7]:
         st.markdown("### 📚 Références 2024-2026")
         st.markdown("""
@@ -2304,10 +2301,20 @@ def main():
         "ot_genome": None, "ot_index": None, "ot_summary": None, "ot_hits": None,
         "bench_results": None, "biomarker_results": None,
         "plant_genome": None, "plant_index": None,
+        "plant_genome_select": None, "plant_chrom_select": None,
         "field_trial": None, "field_results": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state: st.session_state[k] = v
+
+    # ── Reset sécurisé du module Plant ──
+    if st.session_state.get("plant_genome") is not None:
+        pg_keys = list(st.session_state["plant_genome"].keys())
+        if pg_keys:
+            first_key = pg_keys[0].split("_")[0]
+            if first_key not in PLANT_GENOMES:
+                st.session_state["plant_genome"] = None
+                st.session_state["plant_index"] = None
 
     with st.sidebar:
         st.markdown("## 🔬 MetaInsight *v9*")
@@ -2374,7 +2381,6 @@ def main():
             st.session_state.openrouter_key = st.text_input("Clé OpenRouter", type="password",
                 value=st.session_state.get("openrouter_key", ""), key="ork_in")
 
-    # Onglets
     tab_names = [
         "🏠 Accueil", "📊 Diversité α/β", "🧮 Abondance Diff.", "🧬 CoDA / CLR",
         "📈 Raréfaction", "🔬 Biomarqueurs ROC", "🌿 KEGG",
@@ -2382,12 +2388,10 @@ def main():
         "🔒 Federated", "🔵 Clustering", "🌲 Random Forest", "⏱ Dynamique",
         "🧩 VAE", "💡 XAI/SHAP", "🕸 GNN", "📄 Rapport IA", "🧬 Multi-Omics Avancé",
         "📝 Article", "🧬 PGM Clinique", "🧬 Épitranscriptomique Avancé",
-        "✂️ CRISPR Design & Delivery",
-        "🌱 Plant & Agronomie",
+        "✂️ CRISPR Design & Delivery", "🌱 Plant & Agronomie",
     ]
     tabs = st.tabs(tab_names)
 
-    # Onglet 0 : Accueil
     with tabs[0]:
         st.markdown("## 🏠 Accueil — MetaInsight v9")
         st.markdown('<div class="badge-new">Données RÉELLES</div> <div class="badge-fix">CRISPR</div> <div class="badge-new">Plant</div>', unsafe_allow_html=True)
@@ -2403,10 +2407,9 @@ def main():
         - 🧬 PGM clinique (BRCA, CPIC, CADD)
         - 🧬 Épitranscriptomique (m6A, m5C, Ψ)
         - ✂️ CRISPR Design & Delivery (14 sous-onglets)
-        - 🌱 **Plant & Agronomie (NOUVEAU)** — compatible SIVB/CAST 2026
+        - 🌱 Plant & Agronomie — compatible SIVB/CAST 2026
         """)
 
-    # Onglet 1 : Diversité
     with tabs[1]:
         st.markdown("## 📊 Diversité α/β")
         df = st.session_state.df_microbiome
@@ -2425,7 +2428,6 @@ def main():
                                  template="plotly_dark", points="all")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 2 : Abondance
     with tabs[2]:
         st.markdown("## 🧮 Abondance Différentielle")
         df = st.session_state.df_microbiome
@@ -2448,7 +2450,6 @@ def main():
                     else:
                         st.dataframe(maaslin2_like(df, tc, gc).head(15))
 
-    # Onglet 3 : CoDA
     with tabs[3]:
         st.markdown("## 🧬 CoDA")
         df = st.session_state.df_microbiome
@@ -2464,7 +2465,6 @@ def main():
                                  color=gc if gc else None, template="plotly_dark")
                 st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 4 : Raréfaction
     with tabs[4]:
         st.markdown("## 📈 Raréfaction")
         df = st.session_state.df_microbiome
@@ -2481,7 +2481,6 @@ def main():
                     fig.update_layout(template="plotly_dark", title="Raréfaction")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 5 : ROC
     with tabs[5]:
         st.markdown("## 🔬 Biomarqueurs ROC")
         df = st.session_state.df_microbiome
@@ -2503,7 +2502,6 @@ def main():
                     st.session_state.biomarker_results = {"df_ranked": pd.DataFrame(auc_results).sort_values("AUC", ascending=False)}
                     st.dataframe(st.session_state.biomarker_results["df_ranked"])
 
-    # Onglet 6 : KEGG
     with tabs[6]:
         st.markdown("## 🌿 KEGG")
         df = st.session_state.df_microbiome
@@ -2517,7 +2515,6 @@ def main():
                                     template="plotly_dark", title="KEGG")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 7 : Multi-Omics
     with tabs[7]:
         st.markdown("## 🔗 CCA")
         df = st.session_state.df_microbiome
@@ -2536,7 +2533,6 @@ def main():
                                      color=gc if gc else None, template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 8 : DNABERT-2
     with tabs[8]:
         st.markdown("## 🧬 DNABERT-2")
         df = st.session_state.df_microbiome
@@ -2552,7 +2548,6 @@ def main():
                     axes[i].set_title(f"Head {i+1}")
                 st.pyplot(fig); plt.close()
 
-    # Onglet 9 : Causal ML
     with tabs[9]:
         st.markdown("## ⚗️ Causal ML")
         df = st.session_state.df_microbiome
@@ -2566,7 +2561,6 @@ def main():
                     st.metric("Spearman", f"{corr:.3f}")
                     st.metric("p-value", f"{p:.4f}")
 
-    # Onglet 10 : GenAI
     with tabs[10]:
         st.markdown("## ✨ GenAI")
         df = st.session_state.df_microbiome
@@ -2581,7 +2575,6 @@ def main():
                     synth = np.clip(np.random.randn(ns, len(tc)) * (sub.std(0) + 1e-6) + sub.mean(0), 0, None)
                     st.dataframe(pd.DataFrame(synth, columns=tc).head())
 
-    # Onglet 11 : Federated
     with tabs[11]:
         st.markdown("## 🔒 Federated")
         r = st.slider("Rounds", 2, 20, 10, key="fed_r")
@@ -2590,7 +2583,6 @@ def main():
             fig = px.line(x=np.arange(1, r+1), y=acc, template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 12 : Clustering
     with tabs[12]:
         st.markdown("## 🔵 Clustering")
         df = st.session_state.df_microbiome
@@ -2607,7 +2599,6 @@ def main():
                     fig = px.scatter(dfp, x="PC1", y="PC2", color="Cluster", template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 13 : Random Forest
     with tabs[13]:
         st.markdown("## 🌲 Random Forest")
         df = st.session_state.df_microbiome
@@ -2625,7 +2616,6 @@ def main():
                                  template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 14 : Dynamique
     with tabs[14]:
         st.markdown("## ⏱ Dynamique")
         df = st.session_state.df_microbiome
@@ -2638,7 +2628,6 @@ def main():
                     fig = px.line(x=np.arange(len(vals)), y=vals, template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 15 : VAE
     with tabs[15]:
         st.markdown("## 🧩 VAE")
         df = st.session_state.df_microbiome
@@ -2655,7 +2644,6 @@ def main():
                                      color=gc if gc else None, template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 16 : XAI
     with tabs[16]:
         st.markdown("## 💡 XAI")
         df = st.session_state.df_microbiome
@@ -2674,7 +2662,6 @@ def main():
                                  template="plotly_dark")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 17 : GNN
     with tabs[17]:
         st.markdown("## 🕸 GNN")
         df = st.session_state.df_microbiome
@@ -2706,7 +2693,6 @@ def main():
                     fig.update_layout(template="plotly_dark", showlegend=False)
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 18 : Rapport IA
     with tabs[18]:
         st.markdown("## 📄 Rapport IA")
         p = st.text_area("Question", "Analyser les différences", key="rep_p")
@@ -2718,12 +2704,10 @@ def main():
                 deepseek_key=st.session_state.get("deepseek_key", ""))
             st.info(r)
 
-    # Onglet 19 : Multi-Omics Avancé
     with tabs[19]:
         st.markdown("## 🧬 Multi-Omics Avancé")
         st.info("Chargez vos fichiers dans la sidebar")
 
-    # Onglet 20 : Article
     with tabs[20]:
         st.markdown("## 📝 Article")
         with st.form("article_f"):
@@ -2739,7 +2723,6 @@ def main():
                     deepseek_key=st.session_state.get("deepseek_key", ""))
                 st.markdown(r)
 
-    # Onglet 21 : PGM Clinique
     with tabs[21]:
         st.markdown("## 🧬 PGM Clinique")
         pgm = st.session_state.pgm_data
@@ -2784,7 +2767,6 @@ def main():
                     ax.set_xlim(0, lengths[g])
                     st.pyplot(fig); plt.close()
 
-    # Onglet 22 : Épitranscriptomique Avancé
     with tabs[22]:
         st.markdown("## 🧬 Épitranscriptomique Avancé")
         epi = st.session_state.epi_data
@@ -2813,16 +2795,14 @@ def main():
                                  color='condition', template="plotly_dark", points="all")
                     st.plotly_chart(fig, use_container_width=True)
 
-    # Onglet 23 : CRISPR
     with tabs[23]:
         render_crispr_tab()
 
-    # Onglet 24 : Plant & Agronomie
     with tabs[24]:
         render_plant_tab()
 
     st.markdown("---")
-    st.caption("🧬 MetaInsight v9 + CRISPR + Plant (données réelles) · Doench 2016 · UCSC · CFD/MIT · Ensembl Plants · SIVB/CAST 2026")
+    st.caption("🧬 MetaInsight v9 + CRISPR + Plant · Doench 2016 · UCSC · CFD/MIT · Ensembl Plants · SIVB/CAST 2026")
 
 if __name__ == "__main__":
     main()
